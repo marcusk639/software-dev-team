@@ -1,0 +1,20 @@
+{
+  "name": "software-dev-team",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Autonomous software development team built on the Claude Agent SDK",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.283"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
