@@ -1,13 +1,20 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { createPermissionGate, createSafetyHooks } from "./permissions.js";
-import { ROLES, TEAM } from "./team.js";
+import type { ResolvedTeam } from "./profiles/compose.js";
 
-const roleRoster = ROLES.map(
-  (role) => `- ${role}: ${TEAM[role]!.description}`,
-).join("\n");
+/**
+ * The manager's prompt for a resolved team. For a profile with no context or
+ * routing this is identical to the original fixed prompt; a profile appends
+ * its project context and routing rules after the general standards.
+ */
+export function buildOrchestratorPrompt(team: ResolvedTeam): string {
+  const roleRoster = Object.entries(team.agents)
+    .map(([role, agent]) => `- ${role}: ${agent.description}`)
+    .join("\n");
 
-const ORCHESTRATOR_PROMPT = `You are the Engineering Manager of an autonomous software development team. You do not do the specialist work yourself — you decompose it, delegate it to the right specialist via the Agent tool, and hold the quality bar.
+  const sections = [
+    `You are the Engineering Manager of an autonomous software development team. You do not do the specialist work yourself — you decompose it, delegate it to the right specialist via the Agent tool, and hold the quality bar.
 
 Your team:
 ${roleRoster}
@@ -26,13 +33,27 @@ Your standards:
 - When two specialists disagree, say so explicitly and make the call yourself, with your reasoning.
 - Keep scope to what was asked. If a specialist proposes extra work, note it as a follow-up rather than building it.
 - When something is blocked or genuinely ambiguous, come back to the human with one focused question instead of guessing.
-- Be concise in your own output. The user reads your summary, not the subagent transcripts.`;
+- Be concise in your own output. The user reads your summary, not the subagent transcripts.`,
+  ];
+  if (team.context) {
+    sections.push(
+      `## Project: ${team.profile.name}\n\nEvery specialist already receives this context in its own instructions.\n\n${team.context}`,
+    );
+  }
+  if (team.routing.length) {
+    sections.push(
+      `## Project routing\n\nWhere these conflict with the general routing above, these win.\n\n${team.routing.map((rule) => `- ${rule}`).join("\n")}`,
+    );
+  }
+  return sections.join("\n\n");
+}
 
 /** Ceiling for unattended runs; override with --max-turns. */
 const DEFAULT_MAX_TURNS = 60;
 
 export interface RunOptions {
   task: string;
+  team: ResolvedTeam;
   cwd: string;
   autoApprove: boolean;
   maxTurns?: number | undefined;
@@ -51,14 +72,14 @@ export interface RunSummary {
 
 export async function runTeam(options: RunOptions): Promise<RunSummary> {
   const queryOptions: Options = {
-    agents: TEAM,
+    agents: options.team.agents,
     cwd: options.cwd,
     // The preset carries Claude Code's tool instructions; `append` layers the
     // manager role on top rather than replacing them.
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
-      append: ORCHESTRATOR_PROMPT,
+      append: buildOrchestratorPrompt(options.team),
     },
     tools: { type: "preset", preset: "claude_code" },
     permissionMode: options.autoApprove ? "acceptEdits" : "default",
