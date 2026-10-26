@@ -58,7 +58,7 @@ All of RP §5 applies. These matter most here:
 - There is no `.claude/settings.json`, `.mcp.json`, root `CLAUDE.md` or `AGENTS.md` today. A PR could add any of them, so the engine's review action must neutralize PR-head agent config, disable hooks, pass `--strict-mcp-config` and `--setting-sources user`, and deny `Skill` and reads of `.claude-pr/`. These are mandatory engine properties (§9).
 - PRs land as merge commits, not squashes. Commit subjects reach `main` and the PR title doesn't, so the reviewer checks commit subjects (`OUT/commits.txt`) and the kit's `titleScope` check is off.
 - There is no file-size rule, so the kit's `newFileSize` check is off.
-- The reviewer's scripts use Node built-ins only. The repo's own toolchain (pnpm, tsx, TypeScript 7) is never installed in the review job, and none of the code under review runs there. The base branch's `.pr-review/checks/*.mjs` modules do run, in the facts step, with `GH_TOKEN` in the environment. They are trusted like the knowledge, because they come from the trust SHA, never the PR head.
+- The reviewer's scripts use Node built-ins only. The repo's own toolchain (pnpm, tsx, TypeScript 7) is never installed in the review job, and none of the code under review runs there. The base branch's `.pr-review/checks/*.mjs` modules do run in the facts step. From kit `fb07975` (P0.1) each runs in an isolated child process with a PATH-only environment (no `GH_TOKEN`), an empty working directory and a 20-second kill timeout, using only `ctx.git` (run as `git -C <repo>` with no user or system config), `ctx.mergeBase` and the read helpers. They are trusted like the knowledge, because they come from the trust SHA, never the PR head.
 - `id-token: write` and `pull-requests: write` are job-level permissions, so they apply to every step of the review job, facts included, not only to the review or publish step.
 - **Accepted exposure: a same-repo PR can rewrite the workflow.** `pull_request` runs the workflow file from the PR head, so a branch pushed to this repo can edit `pr-review.yml` and send the review job's secrets (`CLAUDE_CODE_OAUTH_TOKEN`, `PR_REVIEW_ID_KEY`, `SECURITY_ADVISORY_TOKEN`) anywhere. This is the same gap recovery-platform accepted (RP §10): forks get no secrets, and Marcus is the only collaborator. But the agents that push branches here run with Marcus's credentials, so an agent steered by content it read could make such an edit. The self-edit High finding flags any change to the workflow, and a required-reviewer environment was rejected because it would gate every review on Marcus. **Rotate all three secrets after any suspicious PR**, or any PR that edits `.github/workflows/pr-review*.yml` in a way you didn't intend.
 
@@ -125,7 +125,7 @@ The kit's generic facts are adopted: changed files, packages, link types, the se
 
 | Check              | Module                 | What it reports                                                                                                                                                                                                                                |
 | ------------------ | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `policy-loosening` | `checks/policy.mjs`    | Compares the `denies`, `allows`, `check` and accepted-false-positive tables of every policy test suite at the merge base and at the head, across files (at most 40 suites, each under 256 KB). Reports deny→allow moves, deny cases removed with no replacement, and new allow cases, as counts and `file:line` only, never the case text, since a loosened case may be a working bypass. Suites without case tables (loops, plain `it()`) produce nothing, and that silence is not coverage. |
+| `policy-loosening` | `checks/policy.mjs`    | Compares the `denies`, `allows`, `check` and accepted-false-positive tables of every policy test suite at the merge base and at the head, across files (at most 40 suites, each under 256 KB). Reports deny→allow moves, deny cases removed with no replacement, and new allow cases, as counts and `file:line` ranges only, never the case text, since a loosened case may be a working bypass. Notes stay under the kit's 300-character cap; the addendum's "Project facts" section says what each one means. Suites without case tables (loops, plain `it()`) produce nothing, and that silence is not coverage. |
 | `carve-outs`       | `checks/policy.mjs`    | Added lines in the policy that look like an exemption (`return null`, `exempt`, `strip`, `skip`, `except`, `bypass`, `SAFE_`/`NO_OP_` names), one fact per file.                                                                               |
 | `role-names`       | `checks/contracts.mjs` | `AGENTS` keys removed (and the prompts that still name them) or added (and named in no prompt).                                                                                                                                                |
 | `prompt-sections`  | `checks/contracts.mjs` | Section tags removed (marked consumer-breaking) or added in a `prompt.md`.                                                                                                                                                                     |
@@ -198,7 +198,7 @@ See `docs/plans/pr-reviewer-runbook.md`. The order is: skeleton PR, merge, secre
 
 ## 9. What the engine provides
 
-Mandatory security properties, inside the kit's actions. They were requested on 2026-10-26 and landed in the kit's P0 commit `be671da`. Both workflows now pin `74c155b` (P1 and P2, no breaking changes). `validate` now requires them:
+Mandatory security properties, inside the kit's actions. They were requested on 2026-10-26 and landed in the kit's P0 commit `be671da`. Both workflows now pin `fb07975` (P1, P2 and P0.1). `validate` now requires them:
 
 - `--setting-sources user`
 - `Skill` and `Read(./.claude-pr/**)` disallowed
@@ -207,9 +207,8 @@ Mandatory security properties, inside the kit's actions. They were requested on 
 - one trust SHA (the PR's `base.sha`) for facts, the model's copy of the knowledge and publish. The kit moved project files to a root `.pr-review/` for this, so the action's `.claude/` restore from the base branch tip can't swap them (engine decision, 2026-10-26)
 - `validate` checks for these properties
 
-Still open (not in `74c155b`). Until they land, project checks and the addendum stand in for them:
+Still open (not in `fb07975`). Until they land, project checks and the addendum stand in for them:
 
-- P0.1: project checks in an isolated child process, `ctx.mergeBase`, model writes limited to named files, redacted check notes, a default-branch guard on learning. **A precondition for enabling the reviewer** (runbook step 0).
 - a test-excluding size measure for `largePr`
 - a summary "Loosenings" section and a commit-subject convention target (the addendum covers both)
 
@@ -241,7 +240,7 @@ Still open (not in `74c155b`). Until they land, project checks and the addendum 
 
 - The project-check tests pass: `node --test '.pr-review/checks/test/*.test.mjs'` gives 38/38. That includes a hostile-input timing test and the 256 KB size cap.
 - The kit's `validate` reports ok, and `actionlint` is clean on both workflows.
-- **Historical dry runs** (kit `local` at `74c155b`, knowledge from the working copy; earlier runs at `85ab8f9` and `be671da` gave the same facts):
+- **Historical dry runs** (kit `local` at `fb07975`, knowledge from the working copy, checks running in the kit's isolated child process; earlier runs at `85ab8f9`, `be671da` and `74c155b` gave the same facts, with longer notes):
   - **PR #1** (`747b8a6...09f238e`) routes `role-registry`, `prompt-sections`, `prompt-bytes`, `plugin-skills`, `tool-names`, `cli-surface`, `placeholders` and `sdk-assumptions`. `tool-lists` reports the role tool sets moving to `src/agents/shared.ts`.
   - **PR #5** (`9fe2d03...74ef64e`) routes 14 of the 16 link types and all classes. `policy-loosening` points at 49 new allow cases and finds no deny case moved or removed (that is accurate: PR #5 tightened, and its loosenings were new allow cases). `carve-outs` points at four files.
   - **`36ed855`** (an intentional loosening: no-op git editors and `.env.ts`) gets a `policy-loosening` fact pointing at exactly those ten new allow cases (`src/permissions-round3.test.ts` lines 269–278), which the commit body declares.

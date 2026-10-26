@@ -47,16 +47,24 @@ function verdicts(git, sha) {
   return { deny, allow };
 }
 
-// "a.test.ts lines 3, 9; b.test.ts line 12" for a list of {file, line}.
+// "a.test.ts:3,7-9; b.test.ts:12" for a list of {file, line}: consecutive
+// lines collapse to ranges, so the note stays inside the kit's 300-char cap.
+function ranges(lines) {
+  const sorted = [...new Set(lines)].sort((a, b) => a - b);
+  const out = [];
+  for (const n of sorted) {
+    const last = out.at(-1);
+    if (last && n === last[1] + 1) last[1] = n;
+    else out.push([n, n]);
+  }
+  const shown = out.slice(0, MAX_LINES).map(([a, b]) => (a === b ? `${a}` : `${a}-${b}`));
+  return out.length > MAX_LINES ? `${shown.join(',')},+${out.length - MAX_LINES} more` : shown.join(',');
+}
+
 function where(locations) {
   const byFile = new Map();
   for (const { file, line } of locations) byFile.set(file, [...(byFile.get(file) ?? []), line]);
-  return [...byFile]
-    .map(([file, lines]) => {
-      const shown = lines.slice(0, MAX_LINES).join(', ');
-      return `${file} line${lines.length > 1 ? 's' : ''} ${shown}${lines.length > MAX_LINES ? ` and ${lines.length - MAX_LINES} more` : ''}`;
-    })
-    .join('; ');
+  return [...byFile].map(([file, lines]) => `${file}:${ranges(lines)}`).join('; ');
 }
 
 const touchesPolicy = (files) => files.some((f) => [f.file, f.oldFile ?? ''].some((p) => isTest(p) || isSrc(p)));
@@ -70,9 +78,9 @@ function loosening(ctx) {
   const added = [...after.allow.keys()].filter((l) => !before.allow.has(l) && !before.deny.has(l)).map((l) => after.allow.get(l));
   const anchor = (list) => ({ file: list[0].file, line: list[0].line });
   const facts = [];
-  if (moved.length) facts.push({ ...anchor(moved), note: `${moved.length} case(s) moved from a deny table to an allow table, now at ${where(moved)} (head). A loosening; check the PR text names each as intentional, with a reason.` });
-  if (removed.length) facts.push({ ...anchor(removed), note: `${removed.length} deny case(s) removed with no replacement, previously at ${where(removed)} (base side of pr.diff). Check the rule still denies them, or the PR says why not.` });
-  if (added.length) facts.push({ ...anchor(added), note: `${added.length} new allow case(s) at ${where(added)} (head). Each is behaviour the policy now promises to allow; any that was denied before is a loosening the PR text must declare.` });
+  if (moved.length) facts.push({ ...anchor(moved), note: `moved deny→allow: ${moved.length} at ${where(moved)} (head)` });
+  if (removed.length) facts.push({ ...anchor(removed), note: `deny removed: ${removed.length} at ${where(removed)} (base)` });
+  if (added.length) facts.push({ ...anchor(added), note: `new allow: ${added.length} at ${where(added)} (head)` });
   return facts;
 }
 
@@ -85,7 +93,7 @@ function carveOuts({ files }) {
     if (!hits.length) continue;
     const lines = hits.slice(0, MAX_LINES).map((a) => a.line);
     const more = hits.length > MAX_LINES ? ` and ${hits.length - MAX_LINES} more` : '';
-    facts.push({ file: f.file, line: lines[0], note: `added line(s) ${lines.join(', ')}${more} look like a carve-out (early allow, exemption or stripping); check what each lets through` });
+    facts.push({ file: f.file, line: lines[0], note: `carve-out-shaped added lines: ${lines.join(',')}${more}` });
   }
   return facts;
 }

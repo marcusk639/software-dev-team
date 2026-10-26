@@ -12,8 +12,8 @@ Repo: `marcusk639/software-dev-team` (public, default branch `main`). Local bran
 - [ ] Run `actionlint .github/workflows/pr-review*.yml`. Expect no output.
 - [ ] `marcusk639/pr-review-kit` is pushed and public, and the pinned SHA exists on GitHub.
 
-- [x] Both workflows are pinned to kit `74c155b21f81b3154ae5347580760c78ed681810` (P1 and P2, on top of the P0 security properties in `be671da`). Don't merge a pin older than P0.
-- [ ] **Precondition for enabling the reviewer: re-pin both workflows to the kit's P0.1 release.** P0.1 runs project checks in an isolated child process (no `GH_TOKEN`, empty cwd, hard kill timeout), adds a `parseOnly` helper, limits model writes to the named output files, redacts check notes, and adds a default-branch guard to the learn workflow. After re-pinning, re-run `validate`, `actionlint`, the check tests and the four historical dry runs. Confirm that `policy-loosening` and the `contracts.mjs` checks still work in the isolated process: they call the `git` helper (`merge-base`, `show`, `ls-tree`, `grep`, `cat-file`), so if P0.1 drops or restricts it, port them to `readHead`/`readBase`/`listFiles`.
+- [x] Both workflows are pinned to kit `fb07975fc921e046cbc89829c6392c096ee48b12` (P0.1, P1 and P2, on top of the P0 security properties in `be671da`). Don't merge a pin older than P0.1.
+- [x] **Precondition met: the kit's P0.1 release is pinned.** Project checks run isolated (no `GH_TOKEN`, empty cwd, kill timeout), with `ctx.git` and `ctx.mergeBase`. Re-verified at `fb07975`: `validate`, `actionlint`, the check tests and the five historical dry runs all pass, and the learning workflow checks out the default branch.
 
 ## Standing rule: the workflow is editable by any PR
 

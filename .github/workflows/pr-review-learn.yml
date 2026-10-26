@@ -30,11 +30,12 @@ jobs:
       - name: Checkout default branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Learn
-        uses: marcusk639/pr-review-kit/actions/learn@74c155b21f81b3154ae5347580760c78ed681810
+        uses: marcusk639/pr-review-kit/actions/learn@fb07975fc921e046cbc89829c6392c096ee48b12
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
@@ -50,8 +51,9 @@ jobs:
       - name: Checkout default branch
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Propose
-        uses: marcusk639/pr-review-kit/actions/propose@74c155b21f81b3154ae5347580760c78ed681810
+        uses: marcusk639/pr-review-kit/actions/propose@fb07975fc921e046cbc89829c6392c096ee48b12

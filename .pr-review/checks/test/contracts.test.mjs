@@ -25,7 +25,7 @@ describe('role-names', () => {
 
   it('says when a new role is named in no prompt', () => {
     const r = make({ 'src/team.ts': team(['architect']), [ORCH]: 'architect\n' }, { 'src/team.ts': team(['architect', 'data-engineer']) });
-    assert.match(run('role-names', r)[0].note, /data-engineer.*not named in/);
+    assert.match(run('role-names', r)[0].note, /new role data-engineer is not named in any prompt/);
   });
 
   it('is silent when team.ts is untouched', () => {
@@ -40,7 +40,7 @@ describe('prompt-sections', () => {
     const r = make({ [p]: '<role>\nx\n</role>\n\n<safety>\ny\n</safety>\n' }, { [p]: '<role>\nx\n</role>\n\n<rules>\ny\n</rules>\n' });
     const notes = run('prompt-sections', r).map((f) => f.note).join('\n');
     assert.match(notes, /removed section <safety>/);
-    assert.match(notes, /consumer-breaking/);
+    assert.match(notes, /removed section <safety> \(consumer-breaking\)/);
     assert.match(notes, /added section <rules>/);
   });
 
@@ -56,8 +56,8 @@ describe('sdk-pin', () => {
   it('names both versions and the files that still assume the old one', () => {
     const r = make({ 'package.json': pkg('0.3.283'), 'src/permissions.ts': '// unverified against 0.3.283\n' }, { 'package.json': pkg('^0.4.0') });
     const [fact] = run('sdk-pin', r);
-    assert.match(fact.note, /"0\.3\.283" → "\^0\.4\.0"/);
-    assert.match(fact.note, /src\/permissions\.ts/);
+    assert.match(fact.note, /SDK "0\.3\.283" → "\^0\.4\.0"/);
+    assert.match(fact.note, /old version still named in src\/permissions\.ts/);
   });
 
   it('ignores a version that is not a string', () => {

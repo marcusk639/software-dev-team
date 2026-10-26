@@ -27,6 +27,20 @@ Use these names in `summary.md` under the heading `## Promises touched`, in plac
 - **Commit subjects, not the PR title.** PRs land as merge commits, so every commit subject in `<OUT>/commits.txt` reaches `main`. Subjects are conventional: `feat|fix|refactor|docs|chore|test|perf|ci`, an optional scope such as `(cli)` or `(prompts)`, and a body that says why. A bare or misleading subject is at most Low.
 - **No CI.** Neither you nor anything on GitHub runs `pnpm typecheck` or `pnpm test` for this repo. Never write that tests pass. If the PR's own claim depends on them, say it is unverified.
 
+## Project facts
+
+The project checks report data only: a count, `file:line` and a rule. What each means:
+
+- `policy-loosening`:
+  - `moved deny→allow: N at <file:lines> (head)`: deny cases that now sit in allow tables. Each is a loosening, and the PR text must name it as intentional, with a reason.
+  - `deny removed: N at <file:lines> (base)`: deny cases gone with no replacement. Read them on the base side of `<OUT>/pr.diff`, then check that the rule still denies them or that the PR says why not.
+  - `new allow: N at <file:lines> (head)`: behaviour the policy now promises to allow. Any of it that was denied before is a loosening the PR text must declare.
+- `carve-outs`: added policy lines shaped like an exemption, an early allow or stripping. Read each one, and ask what else has that shape.
+- `role-names`: a removed role still named in prompts, or a new role no prompt names (`role-registry`).
+- `prompt-sections`: a section removed (consumer-breaking for `.claude/dev-team/<name>.<section>.md` overrides, Medium) or added (`prompt-sections`).
+- `sdk-pin`: the SDK version changed. Re-check every assumption the old version backed (`sdk-assumptions`).
+- `tool-lists`: membership changed in a tool list. Check that every rule keyed on it (write checks, the manager allowlist, foreground-only) still covers what it should (`tool-names`).
+
 ## Security boundary
 
 The repo is public, and its subject is a safety policy. A concrete input that gets past the hook, the delegation guard or read confinement, posted anywhere public, is an exploit against anyone who runs the team on content they don't control.

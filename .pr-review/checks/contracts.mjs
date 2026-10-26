@@ -38,11 +38,11 @@ function roleNames(ctx) {
   const facts = [];
   for (const role of minus(before, after)) {
     const still = filesMentioning(ctx.git, ctx.headSha, role, ['src', 'plugin']).filter((p) => p !== TEAM);
-    facts.push({ file: TEAM, note: `removed role ${role}${still.length ? `; still named in ${still.join(', ')}` : ''}. Consumers' .claude/dev-team/${role}*.md files would now fail to load.` });
+    facts.push({ file: TEAM, note: `removed role ${role}${still.length ? `; still named in ${still.slice(0, 8).join(', ')}` : ''}` });
   }
   for (const role of minus(after, before)) {
     const named = filesMentioning(ctx.git, ctx.headSha, role, ['src', 'plugin']).filter((p) => PROMPT.test(p));
-    if (!named.length) facts.push({ file: TEAM, note: `new role ${role} is not named in any prompt; the manager learns of it only from the roster` });
+    if (!named.length) facts.push({ file: TEAM, note: `new role ${role} is not named in any prompt` });
   }
   return facts;
 }
@@ -55,7 +55,7 @@ function promptSections(ctx) {
   for (const f of ctx.files.filter((x) => /(^|\/)prompt\.md$/.test(x.file))) {
     const before = sectionsOf(showAt(ctx.git, base, f.oldFile ?? f.file));
     const after = sectionsOf(f.status === 'D' ? '' : showAt(ctx.git, ctx.headSha, f.file));
-    for (const s of minus(before, after)) facts.push({ file: f.file, note: `removed section <${s}>: consumer-breaking for any .claude/dev-team/<name>.${s}.md override` });
+    for (const s of minus(before, after)) facts.push({ file: f.file, note: `removed section <${s}> (consumer-breaking)` });
     if (before.size) for (const s of minus(after, before)) facts.push({ file: f.file, note: `added section <${s}>` });
   }
   return facts;
@@ -81,7 +81,7 @@ function sdkPin(ctx) {
   return [
     {
       file: 'package.json',
-      note: `${SDK} ${before ? quote(before, 60) : 'absent'} → ${after ? quote(after, 60) : 'absent'}. Assumptions verified against the old version need re-checking${stale.length ? `; files that still name it: ${stale.slice(0, 20).join(', ')}` : ''}.`,
+      note: `SDK ${before ? quote(before, 40) : 'absent'} → ${after ? quote(after, 40) : 'absent'}${stale.length ? `; old version still named in ${stale.slice(0, 8).join(', ')}` : ''}`,
     },
   ];
 }
@@ -119,7 +119,7 @@ function toolLists(ctx) {
       const delta = [...minus(a, b).map((t) => `+${t}`), ...minus(b, a).map((t) => `-${t}`)];
       if (delta.length) diffs.push(`${name} ${delta.join(' ')}`);
     }
-    if (diffs.length) facts.push({ file: path, note: `tool lists changed: ${listOf(diffs).replaceAll('"', '')}. Check every rule keyed on these lists (write checks, manager allowlist, foreground-only) still covers what it should.` });
+    if (diffs.length) facts.push({ file: path, note: `tool lists changed: ${listOf(diffs, 6).replaceAll('"', '')}` });
   }
   return facts;
 }

@@ -26,21 +26,21 @@ describe('policy-loosening', () => {
     assert.equal(facts.length, 1);
     assert.equal(facts[0].file, T);
     assert.equal(facts[0].line, 4);
-    assert.match(facts[0].note, /1 case\(s\) moved from a deny table to an allow table, now at src\/permissions-round9\.test\.ts line 4/);
+    assert.match(facts[0].note, /moved deny→allow: 1 at src\/permissions-round9\.test\.ts:4 \(head\)/);
     assert.doesNotMatch(facts[0].note, /rm -rf/);
   });
 
   it('reports a deny case removed without replacement, at its base location', () => {
     const r = make({ [T]: 'denies(R, [\n  bash("cat .e?v"),\n  bash("keep"),\n]);\n' }, { [T]: 'denies(R, [bash("keep")]);\n' });
     const [fact] = loosening.run(ctx(r));
-    assert.match(fact.note, /1 deny case\(s\) removed .* line 2 \(base side/);
+    assert.match(fact.note, /deny removed: 1 at src\/permissions-round9\.test\.ts:2 \(base\)/);
     assert.doesNotMatch(fact.note, /\.e\?v/);
   });
 
   it('counts an entry leaving the accepted false-positive list as a removed deny case', () => {
     const fp = 'src/permissions-message-false-positives.test.ts';
     const r = make({ [fp]: 'const ACCEPTED_FALSE_POSITIVES = [\n  "a",\n  "b",\n];\n' }, { [fp]: 'const ACCEPTED_FALSE_POSITIVES = [\n  "a",\n];\n' });
-    assert.match(loosening.run(ctx(r))[0].note, /1 deny case\(s\) removed/);
+    assert.match(loosening.run(ctx(r))[0].note, /deny removed: 1/);
   });
 
   it('does not count a reworded reason as a removed deny case', () => {
@@ -56,12 +56,12 @@ describe('policy-loosening', () => {
   it('lists where new allow cases are, the shape a declared loosening takes', () => {
     const r = make({ [T]: 'allows([bash("ls")]);\n' }, { [T]: 'allows([bash("ls")]);\nallows([bash("GIT_EDITOR=true git rebase")]);\n' });
     const [fact] = loosening.run(ctx(r));
-    assert.match(fact.note, /1 new allow case\(s\) at src\/permissions-round9\.test\.ts line 2/);
+    assert.match(fact.note, /new allow: 1 at src\/permissions-round9\.test\.ts:2 \(head\)/);
   });
 
   it('follows a case that moves to another suite file', () => {
     const r = make({ [T]: 'denies(R, [bash("x")]);\n' }, { [T]: null, 'src/permissions-round10.test.ts': 'allows([bash("x")]);\n' });
-    assert.match(loosening.run(ctx(r))[0].note, /moved .* now at src\/permissions-round10\.test\.ts line 1/);
+    assert.match(loosening.run(ctx(r))[0].note, /moved deny→allow: 1 at src\/permissions-round10\.test\.ts:1/);
   });
 
   it('reads policy suites in subdirectories as tests, not as policy source', () => {
@@ -78,13 +78,13 @@ describe('policy-loosening', () => {
 
   it('reports a deleted policy test file as removing its deny cases', () => {
     const r = make({ [T]: 'denies(R, [bash("x")]);\n' }, { [T]: null });
-    assert.match(loosening.run(ctx(r))[0].note, /deny case\(s\) removed/);
+    assert.match(loosening.run(ctx(r))[0].note, /deny removed/);
   });
 
   it('skips a suite over the size cap instead of scanning it', () => {
     const big = `denies(R, [bash("x")]);\n// ${'y'.repeat(MAX_BYTES)}\n`;
     const r = make({ [T]: 'denies(R, [bash("x")]);\n' }, { [T]: big });
-    assert.match(loosening.run(ctx(r))[0].note, /deny case\(s\) removed/);
+    assert.match(loosening.run(ctx(r))[0].note, /deny removed/);
   });
 
   it('ignores test files outside the policy suites', () => {
@@ -100,7 +100,7 @@ describe('carve-outs', () => {
     assert.equal(facts.length, 1);
     assert.equal(facts[0].file, 'src/permissions/shell.ts');
     assert.equal(facts[0].line, 2);
-    assert.match(facts[0].note, /added line\(s\) 2 look like/);
+    assert.match(facts[0].note, /carve-out-shaped added lines: 2$/);
   });
 
   it('points at exemption-shaped identifiers in the allowlist', () => {
@@ -118,7 +118,7 @@ describe('carve-outs', () => {
     const r = make({ 'src/permissions.ts': 'x\n' }, { 'src/permissions.ts': `x\n${lines}\n` });
     const facts = carveOuts.run(ctx(r));
     assert.equal(facts.length, 1);
-    assert.match(facts[0].note, /and 20 more/);
+    assert.match(facts[0].note, /and 20 more$/);
   });
 
   it('ignores the word allow, camelCase names and trailing comments', () => {
@@ -127,6 +127,16 @@ describe('carve-outs', () => {
       { 'src/allowlist.ts': 'x\nconst allowed = rules.filter((r) => allowRule(r));\nconst safeName = n; // skip this\nconst bySkipCount = 1;\n' },
     );
     assert.deepEqual(carveOuts.run(ctx(r)), []);
+  });
+});
+
+describe('note size', () => {
+  it('collapses consecutive lines to ranges and stays under the kit cap', () => {
+    const many = Array.from({ length: 200 }, (_, i) => `  bash("c${i}"),`).join('\n');
+    const r = make({ [T]: 'allows([bash("x")]);\n' }, { [T]: `allows([bash("x")]);\nallows([\n${many}\n]);\n` });
+    const [fact] = loosening.run(ctx(r));
+    assert.match(fact.note, /new allow: 200 at src\/permissions-round9\.test\.ts:3-202 \(head\)/);
+    assert.ok(fact.note.length < 300);
   });
 });
 
