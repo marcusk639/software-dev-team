@@ -209,6 +209,8 @@ Mandatory security properties, inside the kit's actions. They were requested on 
 
 Still open (not in `fb07975`). Until they land, project checks and the addendum stand in for them:
 
+- P0.2: fixes for the learning-PR bot-identity spoof (git author name) and for withheld globs being dropped, plus four Medium issues. **A precondition for enabling the reviewer** (runbook step 0).
+
 - a test-excluding size measure for `largePr`
 - a summary "Loosenings" section and a commit-subject convention target (the addendum covers both)
 

@@ -12,8 +12,9 @@ Repo: `marcusk639/software-dev-team` (public, default branch `main`). Local bran
 - [ ] Run `actionlint .github/workflows/pr-review*.yml`. Expect no output.
 - [ ] `marcusk639/pr-review-kit` is pushed and public, and the pinned SHA exists on GitHub.
 
-- [x] Both workflows are pinned to kit `fb07975fc921e046cbc89829c6392c096ee48b12` (P0.1, P1 and P2, on top of the P0 security properties in `be671da`). Don't merge a pin older than P0.1.
+- [x] Both workflows are pinned to kit `fb07975fc921e046cbc89829c6392c096ee48b12` (P0.1, P1 and P2, on top of the P0 security properties in `be671da`). (Superseded by the P0.2 precondition below.)
 - [x] **Precondition met: the kit's P0.1 release is pinned.** Project checks run isolated (no `GH_TOKEN`, empty cwd, kill timeout), with `ctx.git` and `ctx.mergeBase`. Re-verified at `fb07975`: `validate`, `actionlint`, the check tests and the five historical dry runs all pass, and the learning workflow checks out the default branch.
+- [ ] **Precondition for enabling the reviewer: re-pin both workflows to the kit's P0.2 release.** P0.2 fixes two High issues from the engine's re-review: the learning-PR bot identity could be spoofed through the git author name, and withheld globs were silently dropped. It also fixes four Medium issues. After re-pinning, re-run `validate`, `actionlint`, the check tests and the five historical dry runs. Don't merge a pin older than P0.2.
 
 ## Standing rule: the workflow is editable by any PR
 
