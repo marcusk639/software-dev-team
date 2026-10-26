@@ -6,7 +6,7 @@
   "description": "Autonomous software development team built on the Claude Agent SDK",
   "scripts": {
     "start": "tsx src/index.ts",
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch --include \"src/**/prompt.md\" src/index.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

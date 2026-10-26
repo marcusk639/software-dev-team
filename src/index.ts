@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { createRenderer } from "./render.js";
-import { runTeam } from "./orchestrator.js";
-import { ROLES, TEAM } from "./team.js";
+import { loadOrchestratorPrompt, runTeam } from "./orchestrator/index.js";
+import { AGENTS, loadTeam, ROLES } from "./team.js";
 
 interface Cli {
   task: string;
@@ -111,9 +111,12 @@ async function main(): Promise<number> {
   }
 
   if ("roles" in cli) {
+    // Loading every prompt here makes --roles a cheap check that none is missing.
+    loadTeam();
+    loadOrchestratorPrompt();
     for (const role of ROLES) {
       console.log(
-        `${role}  [${TEAM[role]!.model ?? "default"}]\n  ${TEAM[role]!.description}\n`,
+        `${role}  [${AGENTS[role].model ?? "default"}]\n  ${AGENTS[role].description}\n`,
       );
     }
     return 0;
