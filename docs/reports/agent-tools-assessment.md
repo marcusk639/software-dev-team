@@ -1,5 +1,7 @@
 # Tools for the agent team: catalog and ratings
 
+> **Snapshot.** This report describes the code at commit 09f238e. The safety hook, ledger and CLI have changed since (PR #2 and its review fixes), so check claims about current behavior against the source.
+
 Assessed against commit `09f238e` on branch `refactor/prompts-in-markdown`, with `@anthropic-ai/claude-agent-sdk` 0.3.283 (`package.json:13`). SDK citations are to `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` ("`sdk.d.ts`") and `sdk-tools.d.ts`.
 
 **Evidence labels.** **[Observed]** means I checked it: I read it in the code or types, or I ran it. The safety-rule results come from a scratch script outside the repo that imported `__testing.denyReason` (`src/permissions.ts:170`) and called it with sample inputs. A few facts come from running `strings` over the bundled CLI binary (`claude-agent-sdk-darwin-arm64/claude`); those are marked **[Observed in binary]** because the published types don't state them. **[Inferred]** means I reasoned it from the types or code and didn't check it at runtime. No `query()` run was made, because that would cost money.

@@ -242,3 +242,20 @@ describe("role tool sets", () => {
     }
   });
 });
+
+describe("prompts describe what the harness enforces (I10)", () => {
+  it("tells the manager about the harness record and the two kinds of stop", () => {
+    const prompt = loadOrchestratorPrompt();
+    assert.doesNotMatch(prompt, /even though you have the tools/);
+    assert.match(prompt, /harness lets you only read, plan and delegate/);
+    assert.match(prompt, /harness record of what that specialist ran/);
+    assert.match(prompt, /no allow rule can unlock it/);
+  });
+
+  it("tells specialists the write check covers file tools and the shell check is best-effort", () => {
+    const prompt = loadTeam()["qa-tester"].prompt;
+    assert.match(prompt, /file-tool writes outside the project/);
+    assert.match(prompt, /best-effort/);
+    assert.match(prompt, /safety layer blocked can't be approved/);
+  });
+});

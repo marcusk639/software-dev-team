@@ -32,9 +32,11 @@ export function usage(): string {
 Options
   --cwd <path>        project the team works in (default: current directory)
   --file <path>       read the task from a file instead of the command line
-  -y, --yes           run unattended: file edits inside --cwd are approved, Bash
-                      not allowed by --allow is refused, and destructive commands
-                      stay blocked either way
+  -y, --yes           run unattended: file edits inside --cwd and the commands
+                      acceptEdits approves (mkdir, touch, rm, rmdir, mv, cp,
+                      sed) run without asking; other Bash not allowed by
+                      --allow is refused. The safety hook still screens all
+                      of it, rm, rmdir and sed included.
   --allow <rule>      let a tool run without approval, e.g. "Bash(pnpm test:*)";
                       repeatable. A rule must name what it allows: bare Bash,
                       Write, Edit, MultiEdit or NotebookEdit, or a wildcard-only
