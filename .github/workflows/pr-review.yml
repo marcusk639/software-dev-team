@@ -52,14 +52,14 @@ jobs:
       # Facts, then the sandboxed model. Gets the Claude token and nothing else.
       - name: Review
         id: review
-        uses: marcusk639/pr-review-kit/actions/review@9e21ba2605bc083749b1bec176989dbfbda7b6d0
+        uses: marcusk639/pr-review-kit/actions/review@4f546774dadb28381a9289f7dcfb52ad61e7a4e7
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
       # Model-free; the only step with the id key and the advisory token.
       - name: Publish
         if: always()
-        uses: marcusk639/pr-review-kit/actions/publish@9e21ba2605bc083749b1bec176989dbfbda7b6d0
+        uses: marcusk639/pr-review-kit/actions/publish@4f546774dadb28381a9289f7dcfb52ad61e7a4e7
         with:
           trust_sha: ${{ steps.review.outputs.trust_sha }}
           action_outcome: ${{ steps.review.outputs.outcome }}
