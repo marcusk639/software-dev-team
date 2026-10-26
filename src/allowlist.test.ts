@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
   allowRuleWarnings,
   BASE_ALLOWED_TOOLS,
-  readRootsFromAllowRules,
+  prepareAllowRules,
   resolveAllowedTools,
 } from "./allowlist.js";
 
@@ -159,22 +162,85 @@ describe("round 2: prefix rules that also cover allowed commands", () => {
   }
 });
 
-describe("readRootsFromAllowRules", () => {
-  it("reads absolute and home directories from Read/Grep/Glob rules", () => {
-    assert.deepEqual(
-      readRootsFromAllowRules(
-        [
-          "Read(//Users/me/notes/**)",
-          "Grep(/opt/docs/**)",
-          "Glob(~/shared/*)",
-          "Read(src/**)",
-          "Read(/tmp/*/x/**)",
-          "Bash(cat:*)",
-        ],
-        "/home/me",
-      ),
-      ["/Users/me/notes", "/opt/docs", "/home/me/shared"],
+describe("prepareAllowRules: read roots use Claude Code's rule-path syntax", () => {
+  // A real layout: the project, a sibling directory, and a fake home above both.
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "sdt-allow-")));
+  const home = join(base, "home");
+  const cwd = join(home, "work", "project");
+  const other = join(base, "opt", "docs");
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(join(home, "shared"), { recursive: true });
+  mkdirSync(other, { recursive: true });
+  const prepare = (...rules: string[]) =>
+    prepareAllowRules([], rules, { cwd, home });
+
+  it("reads `//path` as absolute and `~/path` as the home directory", () => {
+    const { readRoots, warnings } = prepare(
+      `Read(/${other}/**)`,
+      "Grep(~/shared/**)",
+      "Bash(cat:*)",
     );
+    assert.deepEqual(readRoots, [other, join(home, "shared")]);
+    assert.deepEqual(warnings, []);
+  });
+
+  it("reads a single leading `/` and a bare path as relative to --cwd", () => {
+    // Claude Code resolves `/opt/docs` against the project, not the filesystem root.
+    const { readRoots, warnings } = prepare(
+      "Read(/opt/docs/**)",
+      "Grep(src/**)",
+      "Glob(./lib/**)",
+      // The project itself, not the filesystem root.
+      "Read(/)",
+      "Grep(/)",
+    );
+    assert.deepEqual(readRoots, []);
+    assert.deepEqual(warnings, []);
+  });
+
+  for (const rule of [
+    "Read(//**)",
+    "Read(//)",
+    "Grep(//)",
+    "Glob(//*)",
+    "Read(~)",
+    "Read(~/**)",
+    "Grep(~/)",
+  ]) {
+    it(`refuses ${rule}: it opens the filesystem root, home or a parent of the project`, () => {
+      assert.throws(() => prepare(rule), /whole filesystem, the home directory or a parent of the project/);
+    });
+  }
+
+  it("refuses a parent of --cwd", () => {
+    assert.throws(
+      () => prepare(`Read(/${join(home, "work")}/**)`),
+      /a parent of the project/,
+    );
+    assert.throws(() => prepare(`Grep(/${base}/**)`), /a parent of the project/);
+  });
+
+  it("refuses `dir/*` outside the project: the policy cannot grant one level", () => {
+    assert.throws(
+      () => prepare(`Read(/${other}/*)`),
+      (error: Error) =>
+        /only the files directly in/.test(error.message) &&
+        error.message.includes(`"Read(/${other}/**)"`),
+    );
+  });
+
+  it("warns about a rule outside the project that names no single directory", () => {
+    const { readRoots, warnings } = prepare(`Read(/${base}/*/docs/**)`);
+    assert.deepEqual(readRoots, []);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!, /names no single directory/);
+    assert.match(warnings[0]!, /still need approval/);
+  });
+
+  it("keeps Bash prefix-rule warnings in the same list", () => {
+    const { warnings, allowedTools } = prepare("Bash(git push:*)");
+    assert.ok(allowedTools.includes("Bash(git push:*)"));
+    assert.match(warnings.join("\n"), /stay blocked/);
   });
 });
 

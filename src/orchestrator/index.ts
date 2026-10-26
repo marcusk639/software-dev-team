@@ -1,11 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import {
-  DEFAULT_ALLOWED_TOOLS,
-  readRootsFromAllowRules,
-  resolveAllowedTools,
-} from "../allowlist.js";
+import { DEFAULT_ALLOWED_TOOLS, prepareAllowRules } from "../allowlist.js";
 import { createLedger, type LedgerEntry } from "../ledger.js";
 import {
   createPermissionGate,
@@ -126,6 +122,10 @@ export function prepareRun(options: RunOptions): {
   warnings: string[];
 } {
   const project = loadProjectAgents(options.cwd);
+  // Validated once; the read roots come from the same validated list.
+  const rules = prepareAllowRules(DEFAULT_ALLOWED_TOOLS, options.allow ?? [], {
+    cwd: options.cwd,
+  });
   const policy = createPolicy({
     cwd: options.cwd,
     agents: [...ROLES, ...project.agents.map((agent) => agent.name)],
@@ -137,7 +137,7 @@ export function prepareRun(options: RunOptions): {
         agent.model === undefined ? [] : [agent.name],
       ),
     ],
-    readRoots: readRootsFromAllowRules(options.allow ?? []),
+    readRoots: rules.readRoots,
     // Without --yes a human answers prompts, so a read outside --cwd is put
     // to them; unattended, it is denied.
     interactive: !options.autoApprove,
@@ -160,10 +160,7 @@ export function prepareRun(options: RunOptions): {
       append: loadOrchestratorPrompt(customizations),
     },
     tools: { type: "preset", preset: "claude_code" },
-    allowedTools: resolveAllowedTools(
-      DEFAULT_ALLOWED_TOOLS,
-      options.allow ?? [],
-    ),
+    allowedTools: [...rules.allowedTools],
     permissionMode: options.autoApprove ? "acceptEdits" : "default",
     hooks: {
       // Enforced in every mode, including --yes, and inside subagents.
@@ -199,7 +196,11 @@ export function prepareRun(options: RunOptions): {
     ...(options.resume === undefined ? {} : { resume: options.resume }),
   };
 
-  return { queryOptions, ledger, warnings: project.warnings };
+  return {
+    queryOptions,
+    ledger,
+    warnings: [...project.warnings, ...rules.warnings],
+  };
 }
 
 export async function runTeam(options: RunOptions): Promise<RunSummary> {

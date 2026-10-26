@@ -13,10 +13,19 @@
  *   "Bash(pnpm test:*)"   the command and anything after it
  *   "Bash(git status)"    exactly this command
  *   "WebFetch(domain:docs.example.com)"
+ *   "Read(//opt/docs/**)" an absolute directory tree (`//` = absolute)
+ *   "Read(~/notes/**)"    under the home directory
+ *   "Read(/docs/**)"      relative to the project (one leading `/`), as is
+ *                         a bare "Read(docs/**)"
  *   "mcp__server__tool"
+ * A Read, Grep or Glob rule outside the project opens that directory tree to
+ * reads without approval (see prepareAllowRules); one that would open the
+ * filesystem root, the home directory or a parent of the project is refused.
  */
 
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
+import { resolve, sep } from "node:path";
 import { bashDenyReason } from "./permissions/shell.js";
 import { WRITE_TOOLS } from "./tools.js";
 
@@ -119,26 +128,113 @@ export function allowRuleWarnings(rules: readonly string[]): string[] {
   });
 }
 
+/** The run's allow rules, validated once, with what they mean for reads. */
+export interface AllowRules {
+  /** Passed to the SDK as `allowedTools`. */
+  readonly allowedTools: readonly string[];
+  /** Real directories (or files) outside --cwd that Read, Grep and Glob may reach. */
+  readonly readRoots: readonly string[];
+  /** Rules that are valid but do less than they look like; the run prints these. */
+  readonly warnings: readonly string[];
+}
+
+const READ_RULE = /^(Read|Grep|Glob)\((.+)\)$/s;
+
+function realOrResolved(path: string, warnings: string[]): string {
+  try {
+    return realpathSync(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      warnings.push(
+        `Could not resolve ${path} (${code ?? (error as Error).message}); it is used as written.`,
+      );
+    }
+    return resolve(path);
+  }
+}
+
+const isWithin = (root: string, path: string) =>
+  path === root || path.startsWith(root === sep ? sep : root + sep);
+
 /**
- * Directories that Read, Grep or Glob allow rules name, e.g.
- * "Read(//Users/me/notes/**)" or "Grep(~/docs/**)". Reads there need no
- * approval even though they are outside --cwd. A leading `//` or `/` is an
- * absolute path, `~/` the home directory; a specifier with wildcards before
- * its last segment names no single directory and is ignored.
+ * Where a Read/Grep/Glob rule path points, with Claude Code's permission-rule
+ * semantics: `//path` is absolute, `~/path` is under the home directory, and
+ * a single leading `/path` or a bare `path` is relative to the project.
  */
-export function readRootsFromAllowRules(
-  rules: readonly string[],
-  home: string = homedir(),
-): string[] {
-  return rules.flatMap((rule) => {
-    const match = /^(?:Read|Grep|Glob)\((.+)\)$/s.exec(rule.trim());
+function rulePath(path: string, cwd: string, home: string): string {
+  if (path.startsWith("//")) return resolve(path.slice(1));
+  if (path === "~" || path.startsWith("~/")) return resolve(home, `.${path.slice(1)}`);
+  return resolve(cwd, path.replace(/^\/+/, ""));
+}
+
+/**
+ * The read root a Read/Grep/Glob rule opens outside --cwd: its directory when
+ * the specifier is a path, optionally ending in `/**`. Throws for a root that
+ * would open the filesystem, the home directory or a parent of the project,
+ * and for `dir/*`, which in a rule covers only the files directly in `dir`
+ * (the policy opens whole trees, so it cannot honor one level).
+ */
+function readRuleRoot(
+  rule: string,
+  specifier: string,
+  cwd: string,
+  home: string,
+  warnings: string[],
+): string | undefined {
+  const spec = specifier.trim();
+  const tree = /(^|\/)\*\*$/.test(spec);
+  const oneLevel = !tree && /(^|\/)\*$/.test(spec);
+  const path = spec.replace(/(^|\/)\*\*?$/, "$1") || ".";
+  const wild = /[?*[{]/.test(path);
+  // The part before the first wildcard says whether the rule leaves the project.
+  const fixed = wild ? path.slice(0, path.search(/[?*[{]/)).replace(/[^/]*$/, "") : path;
+  const target = realOrResolved(rulePath(fixed || ".", cwd, home), warnings);
+  if (isWithin(cwd, target)) return undefined;
+  if (wild) {
+    warnings.push(
+      `Allow rule "${rule}" names no single directory, so reads it matches outside the project still need approval (and are denied under --yes). Name the directory, e.g. "Read(//abs/dir/**)".`,
+    );
+    return undefined;
+  }
+  if (target === sep || isWithin(target, cwd) || isWithin(target, home)) {
+    throw new Error(
+      `Allow rule "${rule}" would open ${target} to reads without approval: that is the whole filesystem, the home directory or a parent of the project. Name a directory outside the project, e.g. "Read(//opt/docs/**)".`,
+    );
+  }
+  if (oneLevel) {
+    const tool = rule.replace(/\(.*/s, "");
+    throw new Error(
+      `Allow rule "${rule}" covers only the files directly in ${target}, and the safety policy can only open a whole directory to reads. Use "${tool}(/${target}/**)" to allow the directory tree.`,
+    );
+  }
+  return target;
+}
+
+/**
+ * Validates the run's allow rules once and derives what they open to reads.
+ * Throws on a rule the policy refuses. `cwd` and `home` are resolved through
+ * symlinks before any comparison.
+ */
+export function prepareAllowRules(
+  defaults: readonly string[],
+  extra: readonly string[],
+  options: { cwd: string; home?: string },
+): AllowRules {
+  const allowedTools = resolveAllowedTools(defaults, extra);
+  const warnings = allowRuleWarnings(allowedTools);
+  const cwd = realpathSync(options.cwd);
+  const home = realOrResolved(options.home ?? homedir(), warnings);
+  const readRoots = allowedTools.flatMap((rule) => {
+    const match = READ_RULE.exec(rule);
     if (!match) return [];
-    let path = match[1]!.trim().replace(/\/\*\*?$|\*\*$/, "");
-    if (path.startsWith("~/") || path === "~") path = home + path.slice(1);
-    else if (path.startsWith("//")) path = path.slice(1);
-    else if (!path.startsWith("/")) return [];
-    if (/[?*[{]/.test(path)) return [];
-    return [path.replace(/\/+$/, "") || "/"];
+    const root = readRuleRoot(rule, match[2]!, cwd, home, warnings);
+    return root === undefined ? [] : [root];
+  });
+  return Object.freeze({
+    allowedTools: Object.freeze(allowedTools),
+    readRoots: Object.freeze([...new Set(readRoots)]),
+    warnings: Object.freeze(warnings),
   });
 }
 

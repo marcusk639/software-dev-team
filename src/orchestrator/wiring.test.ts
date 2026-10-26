@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -178,16 +178,57 @@ describe("runTeam wiring", () => {
     );
   });
 
-  it("lets an allow rule open a directory outside --cwd to reads", async () => {
+  it("lets an allow rule open a directory outside --cwd to reads, secrets still denied", async () => {
+    // A sibling of the project: tmpdir() itself is a parent of --cwd, which C2 refuses.
+    const docs = realpathSync(mkdtempSync(join(tmpdir(), "sdt-docs-")));
+    writeFileSync(join(docs, ".env"), "KEY=x\n");
     const { queryOptions } = prepareRun({
       task: "t",
       cwd,
       autoApprove: true,
-      allow: [`Read(/${tmpdir()}/**)`],
+      allow: [`Read(/${docs}/**)`],
     });
     assert.equal(
-      await preToolUse(queryOptions, "Read", { file_path: join(tmpdir(), "notes.txt") }, "qa-tester"),
+      await preToolUse(queryOptions, "Read", { file_path: join(docs, "notes.txt") }, "qa-tester"),
       undefined,
     );
+    assert.match(
+      (await preToolUse(queryOptions, "Read", { file_path: join(docs, ".env") }, "qa-tester")) ?? "",
+      /holds secrets/,
+    );
+  });
+
+  it("refuses allow rules that would open the filesystem root or a parent of --cwd", () => {
+    for (const rule of ["Read(//**)", "Read(//)", "Grep(//)", "Glob(//*)", `Read(/${tmpdir()}/**)`]) {
+      assert.throws(
+        () => prepareRun({ task: "t", cwd, autoApprove: true, allow: [rule] }),
+        /whole filesystem, the home directory or a parent of the project/,
+        rule,
+      );
+    }
+  });
+
+  it("reads a single leading slash in a rule as relative to --cwd", async () => {
+    const { queryOptions } = prepareRun({
+      task: "t",
+      cwd,
+      autoApprove: true,
+      allow: ["Read(/etc/**)", "Read(/)"],
+    });
+    assert.match(
+      (await preToolUse(queryOptions, "Read", { file_path: "/etc/hosts" }, "qa-tester")) ?? "",
+      /outside the project/,
+    );
+  });
+
+  it("returns allow-rule warnings with the project-agent warnings", () => {
+    const { warnings } = prepareRun({
+      task: "t",
+      cwd,
+      autoApprove: true,
+      allow: ["Bash(git push:*)"],
+    });
+    assert.ok(warnings.some((w) => /git push.*stay blocked/.test(w)));
+    assert.ok(warnings.some((w) => /general-purpose.*built-in/.test(w)));
   });
 });
