@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-import { DEFAULT_ALLOWED_TOOLS, resolveAllowedTools } from "./allowlist.js";
+import {
+  allowRuleWarnings,
+  DEFAULT_ALLOWED_TOOLS,
+  resolveAllowedTools,
+} from "./allowlist.js";
 import { checkProjectDir, type ParsedArgs, parseArgs, usage } from "./cli.js";
 import { runOutcome } from "./outcome.js";
 import { createRenderer } from "./render.js";
@@ -21,7 +25,15 @@ async function main(): Promise<number> {
   try {
     cli = parseArgs(process.argv.slice(2));
     // Validated now so a bad --allow rule is a usage error, not a failure mid-run.
-    if (cli.kind === "run") resolveAllowedTools(DEFAULT_ALLOWED_TOOLS, cli.allow);
+    if (cli.kind === "run") {
+      resolveAllowedTools(DEFAULT_ALLOWED_TOOLS, cli.allow);
+      for (const warning of allowRuleWarnings([
+        ...DEFAULT_ALLOWED_TOOLS,
+        ...cli.allow,
+      ])) {
+        console.error(`${DIM}${warning}${RESET}`);
+      }
+    }
     if (cli.kind !== "help") checkProjectDir(cli.cwd);
   } catch (error) {
     console.error(`${(error as Error).message}\n\n${usage()}`);
