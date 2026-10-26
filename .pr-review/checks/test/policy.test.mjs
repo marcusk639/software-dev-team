@@ -129,3 +129,12 @@ describe('carve-outs', () => {
     assert.deepEqual(carveOuts.run(ctx(r)), []);
   });
 });
+
+describe('baseOf', () => {
+  it('prefers the kit-supplied merge base when it is a full SHA', async () => {
+    const { baseOf } = await import('../lib/sides.mjs');
+    const sha = 'a'.repeat(40);
+    assert.equal(baseOf({ mergeBase: sha, git: () => { throw new Error('not called'); } }), sha);
+    assert.equal(baseOf({ mergeBase: 'HEAD', baseSha: 'b', headSha: 'c', git: () => 'm\n' }), 'm');
+  });
+});

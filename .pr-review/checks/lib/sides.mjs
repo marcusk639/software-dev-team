@@ -1,7 +1,9 @@
 // Both sides of a changed file, as the engine's three-dot diff sees them: the
-// base side is the merge base of base and head, not the base tip.
+// base side is the merge base of base and head, not the base tip. The kit
+// passes it as ctx.mergeBase from P0.1; before that it is computed here.
 
-export function baseOf({ git, baseSha, headSha }) {
+export function baseOf({ git, baseSha, headSha, mergeBase }) {
+  if (typeof mergeBase === 'string' && /^[0-9a-f]{40}$/.test(mergeBase)) return mergeBase;
   try {
     return git(['merge-base', baseSha, headSha]).trim() || baseSha;
   } catch {
