@@ -18,7 +18,7 @@ After the status line, in this order:
 5. **Metrics**: what will show within weeks whether this worked, and the number that would mean reverting it.
 6. **Risks**: cannibalization and churn.
 
-In your follow-ups, route implementation to backend-engineer and review of payment-critical code to qa-tester.
+In your follow-ups, route implementation to backend-engineer, and review of payment-critical code to code-reviewer and qa-tester.
 </output_format>
 
 <verification>

@@ -131,3 +131,30 @@ describe("turn caps", () => {
     }
   });
 });
+
+describe("code-reviewer", () => {
+  it("is on the team, runs on the judge tier, and cannot change code", () => {
+    const team = loadTeam();
+    const reviewer = team["code-reviewer"];
+    assert.equal(reviewer.model, "opus");
+    for (const tool of ["Write", "Edit", "MultiEdit", "NotebookEdit"]) {
+      assert.ok(!reviewer.tools?.includes(tool), `code-reviewer must not have ${tool}`);
+    }
+    for (const tool of ["Read", "Grep", "Glob", "Bash"]) {
+      assert.ok(reviewer.tools?.includes(tool), `code-reviewer needs ${tool}`);
+    }
+  });
+
+  it("has the review rubric as sections a project can override", () => {
+    const sections = promptSections(loadTeam()["code-reviewer"].prompt);
+    for (const required of ["role", "approach", "rating", "re_review", "output_format", "verification"]) {
+      assert.ok(sections.includes(required), `code-reviewer lacks <${required}>`);
+    }
+  });
+
+  it("is part of the manager's review loop", () => {
+    const prompt = loadOrchestratorPrompt();
+    assert.match(prompt, /- code-reviewer: /);
+    assert.match(prompt, /<workflow>[\s\S]*code-reviewer[\s\S]*<\/workflow>/);
+  });
+});

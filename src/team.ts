@@ -2,6 +2,7 @@ import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 import { agent as architect } from "./agents/architect/index.js";
 import { agent as backendEngineer } from "./agents/backend-engineer/index.js";
 import { agent as businessStrategist } from "./agents/business-strategist/index.js";
+import { agent as codeReviewer } from "./agents/code-reviewer/index.js";
 import { agent as databaseSpecialist } from "./agents/database-specialist/index.js";
 import { agent as frontendEngineer } from "./agents/frontend-engineer/index.js";
 import { agent as mobileDeveloper } from "./agents/mobile-developer/index.js";
@@ -36,6 +37,7 @@ export const AGENTS = {
   "mobile-developer": mobileDeveloper,
   "database-specialist": databaseSpecialist,
   "qa-tester": qaTester,
+  "code-reviewer": codeReviewer,
   "monetization-expert": monetizationExpert,
   "business-strategist": businessStrategist,
 } satisfies Record<string, AgentSpec>;

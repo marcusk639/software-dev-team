@@ -18,12 +18,14 @@ export const READ_ONLY = [
   "WebFetch",
 ] as const;
 
-export const IMPLEMENTER = [
-  ...READ_ONLY,
-  "Write",
-  "Edit",
-  "Bash",
-] as const;
+export const IMPLEMENTER = [...READ_ONLY, "Write", "Edit", "Bash"] as const;
+
+/**
+ * A reviewer reads the change and runs checks (git diff, the type check, the
+ * tests) but cannot edit, so its findings and the engineer's fix stay separate
+ * artifacts. No web tools: the review is of the repository.
+ */
+export const REVIEWER = ["Read", "Grep", "Glob", "Bash"] as const;
 
 /**
  * Turn caps per delegation. The manager's --max-turns does not bound a
