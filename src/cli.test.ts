@@ -114,3 +114,17 @@ describe("parseArgs: defaults and empty input", () => {
     assert.throws(() => parseArgs(["--file", file]), /is empty/);
   });
 });
+
+describe("--strict", () => {
+  it("turns on strict exit codes", () => {
+    const cli = parseArgs(["--strict", "task"]);
+    assert.ok("task" in cli);
+    assert.equal(cli.strict, true);
+  });
+
+  it("is off by default", () => {
+    const cli = parseArgs(["task"]);
+    assert.ok("task" in cli);
+    assert.equal(cli.strict, false);
+  });
+});

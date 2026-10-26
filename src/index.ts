@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { DEFAULT_ALLOWED_TOOLS, resolveAllowedTools } from "./allowlist.js";
 import { checkProjectDir, type Cli, parseArgs, usage } from "./cli.js";
+import { runOutcome } from "./outcome.js";
 import { createRenderer } from "./render.js";
 import {
   loadOrchestratorPrompt,
@@ -93,6 +94,9 @@ async function main(): Promise<number> {
     console.log(`\n${DIM}What actually ran in this run:\n${summary.ledgerText}${RESET}`);
   }
 
+  const outcome = runOutcome(summary, cli.strict);
+  if (outcome.warning) console.error(`\n${outcome.warning}`);
+
   if (summary.isError) console.error(`\n${summary.result}`);
 
   // Printed on failure too: a run stopped by --max-turns is the one most worth resuming.
@@ -101,7 +105,7 @@ async function main(): Promise<number> {
       `\nSession: ${summary.sessionId}\n${DIM}Continue it with --resume ${summary.sessionId} "<message>" (same --cwd).${RESET}`,
     );
   }
-  return summary.isError ? 1 : 0;
+  return outcome.code;
 }
 
 /**

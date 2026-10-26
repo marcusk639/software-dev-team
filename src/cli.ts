@@ -5,6 +5,8 @@ export interface Cli {
   cwd: string;
   autoApprove: boolean;
   verbose: boolean;
+  /** Exit non-zero when the ledger records calls to check, even if the run succeeded. */
+  strict: boolean;
   allow: string[];
   resume?: string | undefined;
   maxTurns?: number | undefined;
@@ -34,6 +36,8 @@ Options
   --resume <id>       continue the session printed at the end of an earlier run,
                       with the same --cwd
   --verbose           show tool results, not just tool calls
+  --strict            exit 3 when the ledger records failed, blocked, refused,
+                      background or unfinished calls (a warning is always printed)
   --max-turns <n>     cap the manager's agentic turns (default 60; each
                       specialist has its own cap)
   --max-budget <usd>  stop the run once its estimated cost, specialists
@@ -62,6 +66,7 @@ export function parseArgs(
   let cwd = process.cwd();
   let autoApprove = false;
   let verbose = false;
+  let strict = false;
   let maxTurns: number | undefined;
   let maxBudgetUsd: number | undefined;
   let model: string | undefined;
@@ -84,6 +89,9 @@ export function parseArgs(
         break;
       case "--verbose":
         verbose = true;
+        break;
+      case "--strict":
+        strict = true;
         break;
       case "--cwd":
         cwd = expect(argv, ++i, "--cwd");
@@ -149,6 +157,7 @@ export function parseArgs(
     cwd,
     autoApprove,
     verbose,
+    strict,
     allow,
     resume,
     maxTurns,
