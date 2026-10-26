@@ -190,26 +190,10 @@ describe("approval: only this session's own directory is exempt, and symlinks ar
   });
 });
 
-describe("I3: commit and PR messages are judged without their text", () => {
-  allows([
-    bash('git commit -m "docs: explain why git reset --hard is blocked"'),
-    bash('git commit -m "fix: stop rm -rf in cleanup script"'),
-    bash("git commit -am 'chore: never git push --force'"),
-    bash('gh pr create --title x --body "never run git push --force"'),
-    bash('gh pr create -t "drop git clean -fd" -b "printenv was removed"'),
-    bash(
-      'gh issue create --title "rm -rf in setup.sh" --body "see git reset --hard"',
-    ),
-    bash('gh pr comment 4 --body "the hook blocks rm -rf ~"'),
-    bash('gh pr edit 4 --body "explains git config alias.x"'),
-    bash('git tag -a v1 -m "rm -rf is blocked now"'),
-    bash('git notes add -m "git push --force is refused"'),
-    bash(
-      "git commit -m \"$(cat <<'EOF'\nfix: ignore .env files\n\ngit reset --hard is blocked\nEOF\n)\"",
-    ),
-    // (The `<<"EOF"` heredoc is no longer stripped: only the exact
-    // `<<'EOF'` form is; see permissions-messages.test.ts.)
-  ]);
+describe("I3 (withdrawn in round 4): messages are screened like any other text", () => {
+  // The allow cases that named a blocked command moved to
+  // permissions-message-false-positives.test.ts as pinned denies.
+  allows([bash('gh pr edit 4 --body "explains git config alias.x"')]);
   denies(SAFETY("recursive delete"), [
     bash('git commit -m "$(rm -rf src)"'),
     bash("git commit -m 'x' && rm -rf src"),
@@ -267,7 +251,6 @@ describe("I5: more commands that destroy work are hard-denied", () => {
     bash("gh api repos/me/repo"),
     bash("gh api -X POST repos/me/repo/issues -f title=x"),
     bash("gh repo view"),
-    bash('gh pr create --title "x" --body "gh repo delete is blocked"'),
   ]);
 });
 
@@ -429,11 +412,7 @@ describe("re-review 1: a nested shell's -cm is not a message", () => {
     bash("sh -c `git log -1 --format=%s`"),
     bash('eval "$(git log -1 --format=%s)"'),
   ]);
-  allows([
-    bash('git commit -m "fix: stop rm -rf in cleanup script"'),
-    bash("git commit -am 'chore: never git push --force'"),
-    bash('bash -c "pnpm test"'),
-  ]);
+  allows([bash('bash -c "pnpm test"')]);
 });
 
 describe("re-review 2: --cached counts only as an option, before -- and outside a comment", () => {
@@ -462,10 +441,7 @@ describe("re-review 4: ~ is the home directory for every read tool", () => {
 });
 
 describe("re-review 1: single-quoted message text is literal, unless the quotes are themselves inside a string", () => {
-  allows([
-    bash("git commit -m 'docs: the `cat .env` trick is blocked'"),
-    bash("git commit -m 'docs: why $(rm -rf src) is refused'"),
-  ]);
+  allows([]);
   denies(SAFETY("recursive delete"), [
     bash(`bash -c "git commit -m '$(rm -rf src)'"`),
     bash(`sh -c "git commit -m '\`rm -rf src\`'"`),

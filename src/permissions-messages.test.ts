@@ -1,10 +1,10 @@
 /**
- * Message stripping, round 3 ruling: messages are dropped only from a single
- * simple git/gh command whose message values are literal quoted spans, or
- * from Claude Code's exact commit heredoc. Everything else is screened whole.
+ * Commit and PR messages are screened in full (round 4 ruling: message
+ * stripping removed). These pin the inputs that earlier stripping rounds let
+ * through, and the computed-script and git rm rules found on the way.
  */
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -12,6 +12,7 @@ import { bashDenyReason } from "./permissions.js";
 
 const project = realpathSync(mkdtempSync(join(tmpdir(), "sdt-messages-")));
 mkdirSync(join(project, "src"));
+writeFileSync(join(project, ".env"), "KEY=x\n");
 
 function denies(reason: RegExp, commands: string[]) {
   for (const command of commands) {
@@ -55,12 +56,7 @@ describe("quotes that straddle separators do not hide a command", () => {
   denies(SECRET, [`git commit -m x " -m '"; cat .env; echo "'"`]);
 });
 
-describe("only Claude Code's exact commit heredoc has its body stripped", () => {
-  allows([
-    "git commit -m \"$(cat <<'EOF'\nfix: ignore .env files\n\ngit reset --hard is blocked\nEOF\n)\"",
-    "git commit -a -m \"$(cat <<'EOF'\nfix: stop rm -rf in cleanup\nEOF\n)\"",
-    "git commit -m \"$(cat <<-'EOF'\n\tfix: stop rm -rf in cleanup\n\tEOF\n)\"",
-  ]);
+describe("a commit heredoc is screened, body included", () => {
   denies(SAFETY("recursive delete"), [
     "git commit -m \"$(cat <<'EOF'\nx\nEOF\nrm -rf src\nEOF\n)\"",
     "git commit -m \"$(cat <<-'EOF'\nx\n\tEOF\nrm -rf src\n\tEOF\n)\"",
@@ -97,7 +93,7 @@ describe("a shell or eval given a computed script is refused", () => {
   ]);
 });
 
-describe("a message in a subshell or group is screened whole (accepted trade-off)", () => {
+describe("a message in a subshell or group is screened (accepted false positive)", () => {
   denies(ANY_SAFETY, [
     "(git commit -m 'rm -rf src')",
     "(cd sub && git commit -m 'fix: rm -rf build dir')",
@@ -106,24 +102,8 @@ describe("a message in a subshell or group is screened whole (accepted trade-off
   ]);
 });
 
-describe("top-level literal messages are text", () => {
-  allows([
-    "git commit -m 'fix: rm -rf build dir'",
-    'git commit -m "fix: rm -rf build dir"',
-    "git commit -am 'chore: never git push --force'",
-    "git commit -m 'x' -m 'body: git reset --hard is blocked'",
-    "git commit --message='docs: rm -rf is refused'",
-    "git commit -m '$(rm -rf src)'",
-    "git commit -m 'docs: the `cat .env` trick is blocked'",
-    "git commit -F msg.txt",
-    "git -C sub commit -m 'chore: drop .env from repo'",
-    "git tag -a v1 -m 'rm -rf is blocked now'",
-    "git notes add -m 'git push --force is refused'",
-    "git stash push -m 'wip: before git reset --hard'",
-    "gh pr create -t 'drop git clean -fd' -b 'printenv was removed'",
-    "gh issue create --title 'rm -rf in setup.sh' --body 'see git reset --hard'",
-    "gh pr comment 4 --body 'the hook blocks rm -rf ~'",
-  ]);
+describe("message flags hide nothing", () => {
+  allows(["git commit -F msg.txt"]);
   denies(SAFETY("recursive delete"), [
     // A double-quoted value that can expand is not literal.
     'git commit -m "fix: \\$x rm -rf build"',
@@ -144,5 +124,81 @@ describe("git rm reads --cached the way git does, after dequoting", () => {
     "git rm -r -- src --cached",
     "git rm -r src -- --cached",
     "git rm -r src '--' --cached",
+  ]);
+});
+
+describe("round 4: the earlier stripping regressions stay denied", () => {
+  denies(SAFETY("recursive delete"), [
+    "git commit -m \"$(cat <<'EOF'\nbody\\\nEOF\nrm -rf src\nEOF\n)\"",
+    "git commit -m \"$(cat <<-'EOF'\n\tbody\\\n\tEOF\nrm -rf src\n\tEOF\n)\"",
+  ]);
+  denies(SECRET, [
+    "git commit -m \"$(cat <<'EOF'\nbody\\\nEOF\ncat .env\nEOF\n)\"",
+    "git commit -Fm'/../.env'",
+    "git commit -Fm'obile/../.env'",
+    "git tag -a v1 -Fm'/../.env'",
+    "git notes add -Fm'/../.env'",
+    "git commit -tm'/../.env'",
+    "git commit -Fm/../.env",
+  ]);
+});
+
+describe("round 4: a clustered -F or -t value is a path", () => {
+  it("denies -F naming a symlink to a secret", () => {
+    const link = join(project, "src", "msg");
+    symlinkSync("../.env", link);
+    assert.match(bashDenyReason("git commit -Fsrc/msg", project) ?? "", SECRET);
+    assert.match(bashDenyReason("git commit -Fmsrc/../src/msg", project) ?? "", SECRET);
+  });
+  allows(["git commit -Fmsg.txt", "git commit -tmpl.txt"]);
+});
+
+describe("round 4: computed scripts, whatever the options or redirections", () => {
+  denies(SAFETY("hides the command it runs"), [
+    `bash -o posix -c "$(git log -1 --format=%s)"`,
+    `bash -O extglob -c "$(git log -1 --format=%s)"`,
+    `bash --rcfile x -c "$(git log -1 --format=%s)"`,
+    `bash --init-file x -c "true; $(git log -1 --format=%s)"`,
+    "sh < <(git log -1 --format=%s)",
+    "bash 0< <(git log -1 --format=%s)",
+    `bash <<< "$(git log -1 --format=%s)"`,
+    `bash -s <<< "$(git log -1 --format=%s)"`,
+    "bash <<< `git log -1 --format=%s`",
+    "git log -1 --format=%s | sudo sh",
+    "git log -1 --format=%s | env bash",
+    "git log -1 --format=%s | doas sh",
+    "$(git log -1 --format=%s)",
+    "`git log -1 --format=%s`",
+    "true && $(git log -1 --format=%s)",
+    "echo hi; `git log -1 --format=%s`",
+  ]);
+  allows([
+    "x=$(date) && echo $x",
+    "echo $(pwd)",
+    "bash -o pipefail -c 'pnpm test'",
+    "bash <<< 'echo hi'",
+    "echo $((1 + 2))",
+    "$(npm bin)/tsc --noEmit",
+  ]);
+});
+
+describe("round 4: git stash pathspecs are screened after option parsing", () => {
+  denies(/may write to git internals or agent configuration/, [
+    "git stash push -m -m '.claude/settings.json'",
+    "git stash push -- -m '.claude/settings.json'",
+  ]);
+  denies(SECRET, ["git stash push -u -m -m '.env'"]);
+});
+
+describe("round 4: eval is judged only in command position, outside quotes", () => {
+  allows([
+    "echo 'never use eval' && x=$(date)",
+    "grep -r 'eval' src | head -5 && echo $(pwd)",
+    'echo "eval is blocked" && echo `pwd`',
+  ]);
+  denies(SAFETY("hides the command it runs"), [
+    'eval "true; $(git log -1 --format=%s)"',
+    "x=1; eval `git log -1 --format=%s`",
+    "eval echo $(id)",
   ]);
 });

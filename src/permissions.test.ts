@@ -495,10 +495,6 @@ describe("post-loop: low and medium findings", () => {
   check(
     [
       // messages that merely mention protected names
-      bash('git commit -m "docs: describe .claude/dev-team prompts"'),
-      bash("git commit -m 'fix: ignore .git dir in walker'"),
-      bash('gh pr create --title "Handle .mcp.json" --body "touches .mcp.json handling"'),
-      bash('git commit -m "chore: add .env to .gitignore"'),
       // routine docker and process commands
       bash("docker compose ps web"),
       bash("docker ps --filter name=api"),
