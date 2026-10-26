@@ -56,3 +56,9 @@ describe("resolveAllowedTools", () => {
     });
   }
 });
+
+describe("MultiEdit needs a specifier", () => {
+  it("rejects a bare MultiEdit rule", () => {
+    assert.throws(() => resolveAllowedTools([], ["MultiEdit"]));
+  });
+});

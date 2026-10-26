@@ -1,8 +1,13 @@
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 
 /** An agent's definition minus its prompt text, which lives in a markdown file. */
-export interface AgentSpec extends Omit<AgentDefinition, "prompt"> {
+export interface AgentSpec
+  extends Omit<AgentDefinition, "prompt" | "model" | "maxTurns"> {
   promptFile: URL;
+  /** Required: each role's tier is deliberate, and pinned against overrides. */
+  model: NonNullable<AgentDefinition["model"]>;
+  /** Required: --max-turns bounds only the manager, not a specialist's loop. */
+  maxTurns: number;
 }
 
 /**

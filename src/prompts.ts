@@ -57,8 +57,8 @@ export interface PromptCustomization {
 
 /**
  * Where a project customizes the team, relative to --cwd. Under `.claude/`,
- * which the safety hook keeps agents from writing, so the team cannot edit its
- * own instructions. The directory is part of the --cwd trust boundary.
+ * which the safety hook keeps agents' file tools and plain shell commands from
+ * writing, so the team cannot edit its own instructions that way. The directory is part of the --cwd trust boundary.
  */
 export const CUSTOMIZATION_DIR = join(".claude", "dev-team");
 
@@ -70,8 +70,9 @@ const CUSTOMIZATION_FILE = /^([^.]+)(?:\.(\w+))?\.md$/;
  * `<name>.replace.md` replaces the whole prompt and `<name>.<section>.md`
  * replaces one <section> block. A file that matches no known name is an error
  * rather than silently ignored, since a typo would otherwise drop the
- * instruction without notice. README.md is left for the project's own notes,
- * and dotfiles (.DS_Store, editor swap files) and directories are skipped.
+ * instruction without notice; so is a symlink, which is not followed. README.md
+ * is left for the project's own notes, and dotfiles (.DS_Store, editor swap
+ * files) and directories are skipped.
  */
 export function loadCustomizations(
   cwd: string,
@@ -80,14 +81,18 @@ export function loadCustomizations(
   const dir = join(cwd, CUSTOMIZATION_DIR);
   let files: string[];
   try {
-    files = readdirSync(dir, { withFileTypes: true })
-      .filter(
-        (entry) =>
-          entry.isFile() &&
-          !entry.name.startsWith(".") &&
-          entry.name !== "README.md",
-      )
-      .map((entry) => entry.name);
+    const entries = readdirSync(dir, { withFileTypes: true }).filter(
+      (entry) => !entry.name.startsWith(".") && entry.name !== "README.md",
+    );
+    // A symlink would be skipped by isFile() and its instruction silently
+    // lost; refusing it says so instead.
+    const link = entries.find((entry) => entry.isSymbolicLink());
+    if (link) {
+      throw new Error(
+        `${join(dir, link.name)} is a symlink. Customization files must be regular files in ${CUSTOMIZATION_DIR}; symlinks are not followed.`,
+      );
+    }
+    files = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
     throw error;

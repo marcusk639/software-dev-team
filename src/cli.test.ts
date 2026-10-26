@@ -95,3 +95,22 @@ describe("--max-budget", () => {
     });
   }
 });
+
+describe("parseArgs: defaults and empty input", () => {
+  it("does not auto-approve unless asked", () => {
+    const cli = parseArgs(["task"]);
+    assert.ok("task" in cli);
+    assert.equal(cli.autoApprove, false);
+    for (const flag of ["--yes", "-y"]) {
+      const yes = parseArgs([flag, "task"]);
+      assert.ok("task" in yes);
+      assert.equal(yes.autoApprove, true);
+    }
+  });
+
+  it("rejects an empty task file instead of exiting as if it ran", () => {
+    const file = join(mkdtempSync(join(tmpdir(), "sdt-cli-")), "task.md");
+    writeFileSync(file, "  \n");
+    assert.throws(() => parseArgs(["--file", file]), /is empty/);
+  });
+});

@@ -3,7 +3,8 @@
  * `allowedTools`. They decide what can run without a human: under --yes the
  * CLI auto-approves only file edits inside --cwd and a few filesystem
  * commands, and refuses every other Bash command it is not told to allow.
- * Without rules here, qa-tester cannot run the target's tests unattended.
+ * Without a rule here, via --allow, or in the target's own
+ * .claude/settings.json, qa-tester cannot run the target's tests unattended.
  *
  * The safety hook still runs first, so an allowed rule can never unlock a
  * command the hook denies. Interactive runs skip the y/N prompt for these too.
@@ -33,7 +34,13 @@ const RULE = /^[A-Za-z][\w-]*(\(.+\))?$/;
  * A bare tool name grants every use of it. For these tools that would hand
  * every command or path to the regex hook alone, so they need a specifier.
  */
-const NEEDS_SPECIFIER = new Set(["Bash", "Write", "Edit", "NotebookEdit"]);
+const NEEDS_SPECIFIER = new Set([
+  "Bash",
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "NotebookEdit",
+]);
 
 function validate(rule: string): string {
   const trimmed = rule.trim();

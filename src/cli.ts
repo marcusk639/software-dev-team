@@ -23,14 +23,23 @@ export function usage(): string {
 
 Options
   --cwd <path>        project the team works in (default: current directory)
-  --yes               auto-approve tool use (destructive commands stay blocked)
+  --file <path>       read the task from a file instead of the command line
+  -y, --yes           run unattended: file edits inside --cwd are approved, Bash
+                      not allowed by --allow is refused, and destructive commands
+                      stay blocked either way
   --allow <rule>      let a tool run without approval, e.g. "Bash(pnpm test:*)";
-                      repeatable. Under --yes, Bash that is not allowed is refused.
-  --resume <id>       continue the session printed at the end of an earlier run
+                      repeatable. A rule must name what it allows: bare Bash,
+                      Write, Edit, MultiEdit or NotebookEdit, or a wildcard-only
+                      specifier such as Bash(*), is rejected.
+  --resume <id>       continue the session printed at the end of an earlier run,
+                      with the same --cwd
   --verbose           show tool results, not just tool calls
-  --max-turns <n>     cap the manager's agentic turns (each specialist has its own cap)
-  --max-budget <usd>  stop the run once its estimated cost passes this amount
+  --max-turns <n>     cap the manager's agentic turns (default 60; each
+                      specialist has its own cap)
+  --max-budget <usd>  stop the run once its estimated cost, specialists
+                      included, passes this amount
   --model <name>      override the orchestrator model (e.g. opus, sonnet)
+  -h, --help          show this help
 
 A project customizes the team's prompts with files in <cwd>/.claude/dev-team/,
 where <name> is a role, "orchestrator" (the manager) or "team" (conventions
@@ -38,7 +47,8 @@ every specialist shares):
   <name>.md            appended to the prompt
   <name>.<section>.md  replaces one <section> of it, e.g. qa-tester.output_format.md
   <name>.replace.md    replaces the whole prompt
---roles --cwd <path> checks them. The manager's prompt may place {{roster}}.
+--roles --cwd <path> checks them. A replacement of the manager's prompt, or of
+its <team> section, must keep {{roster}}.
 
 The team reads and writes real files in --cwd. Point it at a project directory,
 not at this one, unless you mean for it to edit itself.`;
@@ -125,6 +135,9 @@ export function parseArgs(
     ? readFileSync(file, "utf8").trim()
     : positional.join(" ").trim();
   if (!task) {
+    if (file !== undefined) {
+      throw new Error(`--file ${file} is empty.`);
+    }
     if (resume !== undefined) {
       throw new Error("--resume needs a message to send to the session.");
     }
