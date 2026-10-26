@@ -116,6 +116,8 @@ export interface RunSummary extends Summary {
   ledgerFaults: number;
   /** The configuration warnings the run started with (also sent to onWarning). */
   warnings: readonly string[];
+  /** Informational notes the run started with (also sent to onWarning); not counted by --strict. */
+  notices: readonly string[];
 }
 
 /**
@@ -126,7 +128,10 @@ export interface RunSummary extends Summary {
 export function prepareRun(options: RunOptions): {
   queryOptions: Options;
   ledger: ReturnType<typeof createLedger>;
+  /** Configuration problems that change what the team can do; --strict counts them. */
   warnings: string[];
+  /** Information only (see AllowRules.notices); --strict ignores these. */
+  notices: string[];
 } {
   const project = loadProjectAgents(options.cwd);
   // Validated once; the read roots come from the same validated list.
@@ -207,12 +212,15 @@ export function prepareRun(options: RunOptions): {
     queryOptions,
     ledger,
     warnings: [...project.warnings, ...rules.warnings],
+    notices: [...rules.notices],
   };
 }
 
 export async function runTeam(options: RunOptions): Promise<RunSummary> {
-  const { queryOptions, ledger, warnings } = prepareRun(options);
-  for (const warning of warnings) (options.onWarning ?? console.warn)(warning);
+  const { queryOptions, ledger, warnings, notices } = prepareRun(options);
+  for (const warning of [...warnings, ...notices]) {
+    (options.onWarning ?? console.warn)(warning);
+  }
 
   const stream = query({ prompt: options.task, options: queryOptions });
 
@@ -237,6 +245,7 @@ export async function runTeam(options: RunOptions): Promise<RunSummary> {
     ledgerText: ledger.format(),
     ledgerFaults: ledger.faults(),
     warnings: Object.freeze([...warnings]),
+    notices: Object.freeze([...notices]),
   };
 }
 

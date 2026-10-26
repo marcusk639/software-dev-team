@@ -127,3 +127,32 @@ describe("I7: a degraded ledger and configuration warnings need a check", () => 
     assert.match(outcome.warning ?? "", /1 configuration warning/);
   });
 });
+
+describe("re-review 3: only warnings that changed what the team can do trip --strict", () => {
+  it("does not count informational notices", () => {
+    const outcome = runOutcome(
+      {
+        isError: false,
+        ledger: [entry("ok")],
+        warnings: [],
+        notices: ['Allow rule "Bash(git push:*)" also matches … stay blocked'],
+      },
+      true,
+    );
+    assert.equal(outcome.code, 0);
+    assert.equal(outcome.warning, undefined);
+  });
+
+  it("still counts a rejected project agent", () => {
+    const outcome = runOutcome(
+      {
+        isError: false,
+        ledger: [entry("ok")],
+        warnings: ["Project agent gp.md is ignored: …"],
+        notices: ["x"],
+      },
+      true,
+    );
+    assert.equal(outcome.code, 3);
+  });
+});

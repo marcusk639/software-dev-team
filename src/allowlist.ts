@@ -134,8 +134,17 @@ export interface AllowRules {
   readonly allowedTools: readonly string[];
   /** Real directories (or files) outside --cwd that Read, Grep and Glob may reach. */
   readonly readRoots: readonly string[];
-  /** Rules that are valid but do less than they look like; the run prints these. */
+  /**
+   * Rules that do less than they look like (a read rule that opens nothing,
+   * a path that cannot be resolved). They change what the team can do, so
+   * --strict counts them.
+   */
   readonly warnings: readonly string[];
+  /**
+   * Information only: a Bash prefix rule that also matches commands the
+   * safety policy blocks. The rule works as written; --strict ignores these.
+   */
+  readonly notices: readonly string[];
 }
 
 const READ_RULE = /^(Read|Grep|Glob)\((.+)\)$/s;
@@ -222,7 +231,8 @@ export function prepareAllowRules(
   options: { cwd: string; home?: string },
 ): AllowRules {
   const allowedTools = resolveAllowedTools(defaults, extra);
-  const warnings = allowRuleWarnings(allowedTools);
+  const notices = allowRuleWarnings(allowedTools);
+  const warnings: string[] = [];
   const cwd = realpathSync(options.cwd);
   const home = realOrResolved(options.home ?? homedir(), warnings);
   const readRoots = allowedTools.flatMap((rule) => {
@@ -235,6 +245,7 @@ export function prepareAllowRules(
     allowedTools: Object.freeze(allowedTools),
     readRoots: Object.freeze([...new Set(readRoots)]),
     warnings: Object.freeze(warnings),
+    notices: Object.freeze(notices),
   });
 }
 

@@ -53,7 +53,8 @@ Options
   --verbose           show tool results, not just tool calls
   --strict            exit 3 when the ledger records failed, blocked, refused,
                       background or unfinished calls, when the ledger missed
-                      events, or when the run printed configuration warnings;
+                      events, or when a project agent or allow rule was
+                      rejected or has no effect;
                       a Bash failure that a later run of the same command by
                       the same agent passed does not count. The warning is
                       printed when something needs attention, with or without

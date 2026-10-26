@@ -9,8 +9,13 @@ export interface RunRecord {
   readonly ledger: readonly LedgerEntry[];
   /** Hook events or stream messages the ledger failed to record. */
   readonly ledgerFaults?: number | undefined;
-  /** Configuration warnings the run printed (rejected project agents, allow rules). */
+  /**
+   * Configuration warnings that changed what the team can do (rejected
+   * project agents, allow rules that open nothing). These need a check.
+   */
   readonly warnings?: readonly string[] | undefined;
+  /** Informational notes (a rule that also matches blocked commands); never counted. */
+  readonly notices?: readonly string[] | undefined;
 }
 
 const plural = (n: number, one: string, many = `${one}s`) =>
@@ -21,7 +26,8 @@ const plural = (n: number, one: string, many = `${one}s`) =>
  * run failed (including one that ended without a result), otherwise 0, or
  * STRICT_EXIT under --strict when the ledger records failed, blocked,
  * refused, background or unsettled calls, when the ledger itself missed
- * events, or when the run printed configuration warnings. A Bash failure
+ * events, or when a configuration warning changed what the team can do
+ * (informational notices do not count). A Bash failure
  * that a later ok run of the same command by the same agent superseded is
  * shown but does not count. The warning is printed with or without --strict.
  */

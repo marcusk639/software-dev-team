@@ -237,10 +237,11 @@ describe("prepareAllowRules: read roots use Claude Code's rule-path syntax", () 
     assert.match(warnings[0]!, /still need approval/);
   });
 
-  it("keeps Bash prefix-rule warnings in the same list", () => {
-    const { warnings, allowedTools } = prepare("Bash(git push:*)");
+  it("reports Bash prefix-rule warnings as notices, not as warnings that change the run", () => {
+    const { warnings, notices, allowedTools } = prepare("Bash(git push:*)");
     assert.ok(allowedTools.includes("Bash(git push:*)"));
-    assert.match(warnings.join("\n"), /stay blocked/);
+    assert.match(notices.join("\n"), /stay blocked/);
+    assert.deepEqual(warnings, []);
   });
 });
 

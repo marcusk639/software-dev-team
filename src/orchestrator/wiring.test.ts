@@ -283,14 +283,16 @@ describe("runTeam wiring", () => {
     );
   });
 
-  it("returns allow-rule warnings with the project-agent warnings", () => {
-    const { warnings } = prepareRun({
+  it("returns project-agent rejections as warnings and blocked-form rule notes as notices", () => {
+    const { warnings, notices } = prepareRun({
       task: "t",
       cwd,
       autoApprove: true,
-      allow: ["Bash(git push:*)"],
+      allow: ["Bash(git push:*)", "Read(//tmp/*/docs/**)"],
     });
-    assert.ok(warnings.some((w) => /git push.*stay blocked/.test(w)));
+    assert.ok(notices.some((w) => /git push.*stay blocked/.test(w)));
+    assert.ok(!warnings.some((w) => /stay blocked/.test(w)));
     assert.ok(warnings.some((w) => /general-purpose.*built-in/.test(w)));
+    assert.ok(warnings.some((w) => /names no single directory/.test(w)));
   });
 });
