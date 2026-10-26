@@ -8,13 +8,19 @@ Repo: `marcusk639/software-dev-team` (public, default branch `main`). Local bran
 
 - [ ] The kit carries the mandatory security properties (spec §9). Re-pin both workflows to that kit SHA: every `pr-review-kit/actions/*@` line in `.github/workflows/pr-review.yml` and `.github/workflows/pr-review-learn.yml`.
 - [ ] Run `node <kit>/bin/pr-review.mjs validate` from the worktree, using that kit SHA. Expect `validate: ok`.
-- [ ] Run `node --test '.claude/pr-review/checks/test/*.test.mjs'`. Expect every test to pass.
+- [ ] Run `node --test '.pr-review/checks/test/*.test.mjs'`. Expect every test to pass.
 - [ ] Run `actionlint .github/workflows/pr-review*.yml`. Expect no output.
 - [ ] `marcusk639/pr-review-kit` is pushed and public, and the pinned SHA exists on GitHub.
 
+- [ ] **Do not merge anything until both workflows are re-pinned from `85ab8f9` to the kit's P0 SHA.** `85ab8f9` lacks the mandatory security properties.
+
+## Standing rule: the workflow is editable by any PR
+
+`pull_request` runs the workflow from the PR head, so any branch pushed here, including one pushed by an agent running with Marcus's credentials, can rewrite `pr-review.yml` and read the review job's secrets. Every such PR gets the self-edit High finding. **Rotate `CLAUDE_CODE_OAUTH_TOKEN`, `PR_REVIEW_ID_KEY` and `SECURITY_ADVISORY_TOKEN` after any suspicious PR, and after any unintended edit to `.github/workflows/pr-review*.yml`.**
+
 ## 1. Skeleton PR (approval: push and open a PR)
 
-- [ ] Push `chore/pr-review` and open a PR into `main`. This PR adds the reviewer, so it is reviewed without its own knowledge: `main` has no `.claude/pr-review/` yet, so facts finds no project and the model doesn't run. Expect the job to log "no .claude/pr-review/config.json on the base branch yet; review skipped" and publish to post nothing ("skipped: project config"). This run needs no secrets, and it proves the trigger and guards work.
+- [ ] Push `chore/pr-review` and open a PR into `main`. This PR adds the reviewer, so it is reviewed without its own knowledge: `main` has no `.pr-review/` yet, so facts finds no project and the model doesn't run. Expect the job to log "no .pr-review/config.json on the base branch yet; review skipped" and publish to post nothing ("skipped: project config"). This run needs no secrets, and it proves the trigger and guards work.
 - [ ] Merge it with a merge commit (Q4).
 
 ## 2. Secrets and settings (approval for each)
@@ -42,7 +48,7 @@ Every planted bug is fake and labelled `PLANTED` in its commit message and PR ti
 | --- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | R1  | `replay/role-rename`          | Rename `qa-tester` to `quality-tester` in `src/team.ts` and its directory only                                                            | A `role-names` fact. A Medium finding citing `src/orchestrator/prompt.md`. Promises: role boundaries, prompt customization.                                                                                     |
 | R2  | `replay/section-rename`       | Rename `<safety>` to `<guardrails>` in `src/agents/team/prompt.md`                                                                        | A `prompt-sections` fact (consumer-breaking). A Medium finding citing the required-sections test in `src/team.test.ts`.                                                                                         |
-| R3  | `replay/undeclared-loosening` | Move one harmless, clearly fake deny case to an `allows` block, with a matching fake rule change, and say nothing about it in the PR body | A `policy-loosening` fact. A security pointer naming only severity, package and area, with the details in a draft advisory (acceptance 8). Run R3 only after one harmless finding has proved the advisory path. |
+| R3  | `replay/undeclared-loosening` | Move one harmless, clearly fake deny case to an `allows` block, with a matching fake rule change, and say nothing about it in the PR body | A `policy-loosening` fact with the location only. A security pointer naming only severity, package and area, with the details in a draft advisory (acceptance 8). Then grep every public output for the planted case literal: the summary and inline comments (`gh api`), the hidden ledger (decode it), and the job log and any artifacts (`gh run view --log`). Expect zero hits. Run R3 only after one harmless finding has proved the advisory path. |
 | R4  | `replay/ledger-word`          | Add a new outcome word in `src/ledger.ts`, with the orchestrator prompt unchanged                                                         | A finding on the `ledger-text` link citing `src/orchestrator/prompt.md`.                                                                                                                                        |
 | R5  | `replay/sdk-bump`             | Bump the SDK version in `package.json` only                                                                                               | An `sdk-pin` fact listing the files that still name `0.3.283`, and a class 9 finding.                                                                                                                           |
 | R6  | `replay/pr-text`              | A PR body claiming "1300 tests pass, verified live" for a one-line change                                                                 | A class 11 finding that says the claim is unverified (no CI).                                                                                                                                                   |

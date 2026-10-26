@@ -56,8 +56,13 @@ describe('sdk-pin', () => {
   it('names both versions and the files that still assume the old one', () => {
     const r = make({ 'package.json': pkg('0.3.283'), 'src/permissions.ts': '// unverified against 0.3.283\n' }, { 'package.json': pkg('^0.4.0') });
     const [fact] = run('sdk-pin', r);
-    assert.match(fact.note, /0\.3\.283 → \^0\.4\.0/);
+    assert.match(fact.note, /"0\.3\.283" → "\^0\.4\.0"/);
     assert.match(fact.note, /src\/permissions\.ts/);
+  });
+
+  it('ignores a version that is not a string', () => {
+    const r = make({ 'package.json': pkg('0.3.283') }, { 'package.json': '{ "dependencies": { "@anthropic-ai/claude-agent-sdk": { "x": 1 } } }\n' });
+    assert.match(run('sdk-pin', r)[0].note, /"0\.3\.283" → absent/);
   });
 
   it('is silent when another dependency changes', () => {
@@ -71,6 +76,14 @@ describe('tool-lists', () => {
   it('reports a tool added to the manager allowlist', () => {
     const r = make({ 'src/tools.ts': tools(['Read'], ['Read', 'WebFetch']) }, { 'src/tools.ts': tools(['Read', 'WebFetch'], ['Read', 'WebFetch']) });
     assert.match(run('tool-lists', r)[0].note, /MANAGER_ALLOWED \+WebFetch/);
+  });
+
+  it('stays fast on a large unterminated list a PR could write', () => {
+    const hostile = `export type ToolName =\n${'  | "A"\n'.repeat(20000)}export const X = [\n${'  "B",\n'.repeat(20000)}`;
+    const r = make({ 'src/tools.ts': tools(['Read'], ['Read']) }, { 'src/tools.ts': hostile });
+    const t0 = Date.now();
+    run('tool-lists', r);
+    assert.ok(Date.now() - t0 < 2000);
   });
 
   it('reports a change to the ToolName union', () => {

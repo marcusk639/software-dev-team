@@ -4,9 +4,10 @@
 #
 # The kit is pinned by full commit SHA, the same in every pr-review-kit
 # `uses:` line here and in pr-review-learn.yml; a tag or branch would let the
-# engine change under the pin. Third-party actions are pinned by SHA too.
+# engine change under the pin. actions/checkout is pinned by SHA here; the
+# actions the kit uses internally are pinned inside the kit.
 # Project config, knowledge and checks come from the PR's base commit
-# (.claude/pr-review/), never from the PR head.
+# (.pr-review/), never from the PR head.
 name: PR Review
 
 on:

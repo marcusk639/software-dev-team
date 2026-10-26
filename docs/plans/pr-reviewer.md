@@ -4,7 +4,7 @@
 
 **Goal:** Give this repo a consumer of the shared reviewer `marcusk639/pr-review-kit`: workflows, project knowledge, project checks with tests, and seeded learned memory, all verified locally. Nothing is pushed.
 
-**Architecture:** The engine runs from composite actions pinned by full SHA. Everything project-specific lives under `.claude/pr-review/` and is read from the base branch: `config.json`, the `REVIEW.md` addendum, knowledge files, `routing.json`, `checks/*.mjs` and `learned/`. The project checks are pure functions over the parsed diff, plus `git show` of the base and head SHAs.
+**Architecture:** The engine runs from composite actions pinned by full SHA. Everything project-specific lives under `.pr-review/` and is read from the base branch: `config.json`, the `REVIEW.md` addendum, knowledge files, `routing.json`, `checks/*.mjs` and `learned/`. The project checks are pure functions over the parsed diff, plus `git show` of the base and head SHAs.
 
 **Tech stack:** Node 22 built-ins only (`node:test`, `node:child_process`), GitHub Actions YAML, Markdown.
 
@@ -35,8 +35,8 @@
 
 **Files:**
 
-- Create: `.claude/pr-review/checks/lib/case-blocks.mjs`
-- Test: `.claude/pr-review/checks/test/case-blocks.test.mjs`
+- Create: `.pr-review/checks/lib/case-blocks.mjs`
+- Test: `.pr-review/checks/test/case-blocks.test.mjs`
 
 **Interfaces:**
 
@@ -47,7 +47,7 @@
   - `check([bash('a'), ["Read", {file_path: "b"}]], "allow")` gives one allow block whose literals contain `a` and `b`, but not `Read` and not `allow`.
   - Regex literal: `denies(/\(x\) it's/, [bash("y")])` gives the literals `['y']`.
   - Unbalanced input: `denies([bash("z")` does not throw.
-- [ ] **Step 2:** Run `node --test .claude/pr-review/checks/test/` and expect it to fail with a missing module error.
+- [ ] **Step 2:** Run `node --test .pr-review/checks/test/` and expect it to fail with a missing module error.
 - [ ] **Step 3: Implement.** A single forward scanner with string, template, regex and comment states and a parenthesis or bracket depth counter. Tool names (`Bash`, `Read`, `Grep`, `Glob`, `Write`, `Edit`, `Agent`, `Task`) and the verdict words are not case literals.
 - [ ] **Step 4:** Run the tests and expect them to pass.
 
@@ -55,8 +55,8 @@
 
 **Files:**
 
-- Create: `.claude/pr-review/checks/policy.mjs`
-- Test: `.claude/pr-review/checks/test/policy.test.mjs`
+- Create: `.pr-review/checks/policy.mjs`
+- Test: `.pr-review/checks/test/policy.test.mjs`
 
 **Interfaces:**
 
@@ -81,8 +81,8 @@
 
 **Files:**
 
-- Create: `.claude/pr-review/checks/contracts.mjs`
-- Test: `.claude/pr-review/checks/test/contracts.test.mjs`
+- Create: `.pr-review/checks/contracts.mjs`
+- Test: `.pr-review/checks/test/contracts.test.mjs`
 
 **Interfaces:**
 
@@ -102,7 +102,7 @@
 
 ### Task 4: Config, routing and knowledge
 
-**Files (all under `.claude/pr-review/`):** `config.json`, `routing.json`, `REVIEW.md`, `checklist.md`, `contract-map.md`, `conventions.md`, `false-positives.md`, `learned-lessons.md`, `learned/lessons.json`, `learned/precision.json`.
+**Files (all under `.pr-review/`):** `config.json`, `routing.json`, `REVIEW.md`, `checklist.md`, `contract-map.md`, `conventions.md`, `false-positives.md`, `learned-lessons.md`, `learned/lessons.json`, `learned/precision.json`.
 
 - [ ] **Step 1: Write the files from the spec.**
   - `config.json`: §7.2.
@@ -122,8 +122,8 @@
 
 ### Task 6: Local verification and handoff
 
-- [ ] **Step 1:** Run `node --test .claude/pr-review/checks/test/` and expect all tests to pass. `pnpm test` is not run: it doesn't cover `.claude/` and needs an install.
-- [ ] **Step 2: Dry runs.** Run `node ~/dev/pr-review-kit/bin/pr-review.mjs local --project .claude/pr-review --base <b> --head <h>` on:
+- [ ] **Step 1:** Run `node --test .pr-review/checks/test/` and expect all tests to pass. `pnpm test` is not run: it doesn't cover `.claude/` and needs an install.
+- [ ] **Step 2: Dry runs.** Run `node ~/dev/pr-review-kit/bin/pr-review.mjs local --project .pr-review --base <b> --head <h>` on:
   - PR #1 (`747b8a6`…`09f238e`), expecting `role-registry`, `prompt-sections` and `prompt-bytes` to route
   - PR #5 (`9fe2d03`…`74ef64e`), expecting `policy-tests` and `policy-loosening` facts
   - `a945089^`…`a945089` (class 2), expecting `carve-outs` facts on the message-stripping exemption

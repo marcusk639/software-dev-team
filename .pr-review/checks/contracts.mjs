@@ -1,7 +1,7 @@
 // Project checks for the string links typecheck cannot see (contract-map
 // role-registry, prompt-sections, sdk-assumptions, tool-names). Hints for the
 // reviewer, never verdicts.
-import { baseOf, filesMentioning, listOf, showAt } from './lib/sides.mjs';
+import { baseOf, filesMentioning, listOf, quote, showAt } from './lib/sides.mjs';
 
 const TEAM = 'src/team.ts';
 const SDK = '@anthropic-ai/claude-agent-sdk';
@@ -11,10 +11,24 @@ const PROMPT = /^(?:src\/.+\/prompt\.md|plugin\/.+\.md)$/;
 const changed = (files, path) => files.some((f) => f.file === path || f.oldFile === path);
 const minus = (a, b) => [...a].filter((x) => !b.has(x));
 
+// The text between `start` and the next `end` after it, by indexOf: these
+// files are PR-controlled, so no lazy regex scans over them.
+function between(text, start, end) {
+  const i = text.indexOf(start);
+  if (i < 0) return '';
+  const j = text.indexOf(end, i + start.length);
+  return text.slice(i + start.length, j < 0 ? text.length : j);
+}
+
+const ROLE_LINE = /^\s*(?:"([\w-]+)"|([A-Za-z]\w*))\s*[:,]/;
+
 // Role keys of `export const AGENTS = { … }` in src/team.ts.
 function roles(text) {
-  const body = /export const AGENTS = \{([\s\S]*?)\n\}/.exec(text)?.[1] ?? '';
-  return new Set([...body.matchAll(/^\s*(?:"([\w-]+)"|([A-Za-z]\w*))\s*[:,]/gm)].map((m) => m[1] ?? m[2]));
+  const body = between(text, 'export const AGENTS = {', '\n}');
+  return new Set(body.split('\n').flatMap((l) => {
+    const m = ROLE_LINE.exec(l);
+    return m ? [m[1] ?? m[2]] : [];
+  }));
 }
 
 function roleNames(ctx) {
@@ -50,7 +64,8 @@ function promptSections(ctx) {
 const sdkVersion = (text) => {
   try {
     const pkg = JSON.parse(text);
-    return pkg.dependencies?.[SDK] ?? pkg.devDependencies?.[SDK] ?? null;
+    const v = pkg.dependencies?.[SDK] ?? pkg.devDependencies?.[SDK] ?? null;
+    return typeof v === 'string' ? v : null;
   } catch {
     return null;
   }
@@ -61,21 +76,33 @@ function sdkPin(ctx) {
   const before = sdkVersion(showAt(ctx.git, baseOf(ctx), 'package.json'));
   const after = sdkVersion(showAt(ctx.git, ctx.headSha, 'package.json'));
   if (before === after) return [];
-  const old = before?.replace(/^[\^~=]/, '');
+  const old = before?.replace(/^[\^~=]/, '').slice(0, 60);
   const stale = old ? filesMentioning(ctx.git, ctx.headSha, old, ['src', 'plugin']) : [];
   return [
     {
       file: 'package.json',
-      note: `${SDK} ${before ?? 'absent'} → ${after ?? 'absent'}. Assumptions verified against the old version need re-checking${stale.length ? `; files that still name ${old}: ${stale.join(', ')}` : ''}.`,
+      note: `${SDK} ${before ? quote(before, 60) : 'absent'} → ${after ? quote(after, 60) : 'absent'}. Assumptions verified against the old version need re-checking${stale.length ? `; files that still name it: ${stale.slice(0, 20).join(', ')}` : ''}.`,
     },
   ];
 }
 
+const ARRAY_START = /^(?:export )?const ([A-Z_]+) = \[(.*)$/;
+const members = (text) => [...text.matchAll(/"(\w+)"|\.\.\.(\w+)/g)].map((x) => x[1] ?? `...${x[2]}`);
+
+// ToolName's members and every `const NAME = [ … ]` list, read line by line.
 function toolSets(text) {
   const sets = {};
-  const union = /export type ToolName =([\s\S]*?);/.exec(text)?.[1];
-  if (union) sets.ToolName = new Set([...union.matchAll(/"(\w+)"/g)].map((m) => m[1]));
-  for (const m of text.matchAll(/^(?:export )?const ([A-Z_]+) = \[([\s\S]*?)\]/gm)) sets[m[1]] = new Set([...m[2].matchAll(/"(\w+)"|\.\.\.(\w+)/g)].map((x) => x[1] ?? `...${x[2]}`));
+  if (text.includes('export type ToolName =')) sets.ToolName = new Set(members(between(text, 'export type ToolName =', ';')));
+  let open = null;
+  for (const line of text.split('\n')) {
+    const start = open ? null : ARRAY_START.exec(line);
+    const body = start ? start[2] : open ? line : null;
+    if (body === null) continue;
+    if (start) (open = start[1]), (sets[open] = new Set());
+    const close = body.indexOf(']');
+    for (const m of members(close < 0 ? body : body.slice(0, close))) sets[open].add(m);
+    if (close >= 0) open = null;
+  }
   return sets;
 }
 

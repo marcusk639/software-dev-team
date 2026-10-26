@@ -58,7 +58,7 @@ These are the recurring classes, mined from this repo's fix commits and PR descr
 
 ## 10. Over-blocking, or a loosening nobody called out
 
-- **Look for:** a rule that now denies a legitimate, common workflow without saying so; and the reverse, a rule or test changed so that something denied before is now allowed, with no mention in the PR text. The second one is security-relevant: report it as class 2 or 12 with `"security": true`.
+- **Look for:** a rule that now denies a legitimate, common workflow without saying so; and the reverse, a rule or test changed so that something denied before is now allowed, with no mention in the PR text. The second one is security-relevant: report it as class 2 or 12 with `"security": true`. A missing `policy-loosening` fact doesn't clear a suite that has no case tables (see class 12).
 - **Trigger paths:** `src/permissions/**`, `src/permissions*.test.ts`, `src/allowlist.ts`, `src/allowlist.test.ts`.
 - **Evidence:** `36ed855` (no-op git editors and `.env.ts` modules allowed again), `37db442` (`git rm -r --cached` allowed again). PR #5's "Intentional loosenings" section is the expected way to declare one.
 
@@ -70,7 +70,7 @@ These are the recurring classes, mined from this repo's fix commits and PR descr
 
 ## 12. A test that can't catch the regression
 
-- **Look for:** a policy test that asserts only "denied" where the suite's convention pins the exact reason; a deny case deleted or moved to the allow side; a test whose input never reaches the rule it names. The `policy-loosening` fact lists moved and removed deny cases.
+- **Look for:** a policy test that asserts only "denied" where the suite's convention pins the exact reason; a deny case deleted or moved to the allow side; a test whose input never reaches the rule it names. The `policy-loosening` fact gives the locations of moved and removed deny cases. It reads only `denies`, `allows` and `check` tables and the accepted-false-positive list. Suites written as loops or `it()` calls (`src/allowlist.test.ts`, `src/permissions-hook.test.ts`) produce no fact, so check their diffs directly.
 - **Trigger paths:** `src/**/*.test.ts`.
 - **Evidence:** no history yet. Derived from the repo's convention that every reviewed bypass is pinned with its exact input and reason (PR #5), and from the `policy-tests` link.
 

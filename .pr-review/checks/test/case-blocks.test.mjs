@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { caseBlocks } from '../lib/case-blocks.mjs';
+import { caseBlocks as parse } from '../lib/case-blocks.mjs';
+
+const caseBlocks = (src) => parse(src).map(({ verdict, literals }) => ({ verdict, literals }));
 
 describe('caseBlocks', () => {
   it('reads a denies() block', () => {
@@ -41,6 +43,18 @@ describe('caseBlocks', () => {
   it('survives unbalanced input', () => {
     assert.doesNotThrow(() => caseBlocks('denies([bash("z")'));
     assert.doesNotThrow(() => caseBlocks('"unterminated'));
+  });
+
+  it('takes cases only from the array argument, never the reason', () => {
+    const src = 'denies(SAFETY("changes what git runs"), [bash("git config -e")], policy);\nallows([bash("ls")], p2);';
+    assert.deepEqual(caseBlocks(src), [
+      { verdict: 'deny', literals: ['git config -e'] },
+      { verdict: 'allow', literals: ['ls'] },
+    ]);
+  });
+
+  it('records the line of each case', () => {
+    assert.deepEqual(parse('// x\ndenies(R, [\n  bash("a"),\n  bash("b"),\n]);')[0].lines, [3, 4]);
   });
 
   it('leaves a check() without a verdict word out', () => {

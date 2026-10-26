@@ -20,7 +20,7 @@ This repo is a safety harness for autonomous agents. Most of its value is a patt
 | Effect on merging       | Advisory only. It comments, and never approves, blocks or becomes a required check.                                                                               |
 | Runtime, auth and model | The kit's composite actions on `claude-code-action`, with `CLAUDE_CODE_OAUTH_TOKEN` and Opus. The kit is public and pinned by full SHA.                           |
 | Security findings (Q1)  | Safety-hook bypass findings stay private: a public pointer plus a draft advisory. The pointer may name a fixed policy area, never the input.                      |
-| Stacked PRs (Q2)        | Only PRs whose base is `main` are reviewed. Loading rules from `main` instead is a follow-up (§12), because the action's own `.claude/` restore defeats it today. |
+| Stacked PRs (Q2)        | Only PRs whose base is `main` are reviewed, using a workflow branch filter and a `base.ref` guard (the pattern the engine endorses). Loading rules from `main` for other bases (`trustRef`) stays out. |
 | CI (Q3)                 | A minimal `pnpm typecheck && pnpm test` workflow is separate follow-up work.                                                                                      |
 | Merge style (Q4)        | Merge commits stay, so commit subjects are what reach `main`.                                                                                                     |
 | Lessons (Q5)            | No auto-merge. Every lesson comes in the weekly learning PR.                                                                                                      |
@@ -58,7 +58,9 @@ All of RP §5 applies. These matter most here:
 - There is no `.claude/settings.json`, `.mcp.json`, root `CLAUDE.md` or `AGENTS.md` today. A PR could add any of them, so the engine's review action must neutralize PR-head agent config, disable hooks, pass `--strict-mcp-config` and `--setting-sources user`, and deny `Skill` and reads of `.claude-pr/`. These are mandatory engine properties (§9).
 - PRs land as merge commits, not squashes. Commit subjects reach `main` and the PR title doesn't, so the reviewer checks commit subjects (`OUT/commits.txt`) and the kit's `titleScope` check is off.
 - There is no file-size rule, so the kit's `newFileSize` check is off.
-- The reviewer's scripts use Node built-ins only. The repo's own toolchain (pnpm, tsx, TypeScript 7) is never installed in the review job, and no project code runs there.
+- The reviewer's scripts use Node built-ins only. The repo's own toolchain (pnpm, tsx, TypeScript 7) is never installed in the review job, and none of the code under review runs there. The base branch's `.pr-review/checks/*.mjs` modules do run, in the facts step, with `GH_TOKEN` in the environment. They are trusted like the knowledge, because they come from the trust SHA, never the PR head.
+- `id-token: write` and `pull-requests: write` are job-level permissions, so they apply to every step of the review job, facts included, not only to the review or publish step.
+- **Accepted exposure: a same-repo PR can rewrite the workflow.** `pull_request` runs the workflow file from the PR head, so a branch pushed to this repo can edit `pr-review.yml` and send the review job's secrets (`CLAUDE_CODE_OAUTH_TOKEN`, `PR_REVIEW_ID_KEY`, `SECURITY_ADVISORY_TOKEN`) anywhere. This is the same gap recovery-platform accepted (RP §10): forks get no secrets, and Marcus is the only collaborator. But the agents that push branches here run with Marcus's credentials, so an agent steered by content it read could make such an edit. The self-edit High finding flags any change to the workflow, and a required-reviewer environment was rejected because it would gate every review on Marcus. **Rotate all three secrets after any suspicious PR**, or any PR that edits `.github/workflows/pr-review*.yml` in a way you didn't intend.
 
 ## 7. Design
 
@@ -78,7 +80,10 @@ All of RP §5 applies. These matter most here:
 
 - **`.github/workflows/pr-review-learn.yml`** is the kit's learning workflow, weekly plus manual dispatch, with the same SHA pins. The `learn` job holds the Claude token and no write token. The `propose` job holds the write token and no model. Lessons reach the reviewer only when Marcus merges the learning PR.
 
-### 7.2 Project files (`.claude/pr-review/`, read from the base commit)
+### 7.2 Project files (`.pr-review/`, read from the trust SHA)
+
+The kit reads everything below from the PR's `base.sha` and replaces the working-tree copy from it before the model runs. A PR's edits to `.pr-review/` are visible to the model only in `pr.diff`.
+
 
 | File                                                                   | Contents                                                                                                                                                                                                                   |
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -108,7 +113,7 @@ Every map entry was re-verified against `main` when written, and the kit's `vali
 | `src/cli.ts`, `src/index.ts`                                     | cli-surface                                                               | 6, 7, 8                  |
 | `package.json`, `src/orchestrator/index.ts`                      | sdk-assumptions, placeholders                                             | 4, 8, 9                  |
 | `.prettierrc`, `.prettierignore`, `.gitattributes`               | prompt-bytes                                                              | 7                        |
-| `.claude/pr-review/**`, the two workflows                        | review-config                                                             | 11 (and self-edit High)  |
+| `.pr-review/**`, the two workflows                        | review-config                                                             | 11 (and self-edit High)  |
 | anything                                                         |                                                                           | 11 (always)              |
 
 Classes 1–5 are security classes. Class 9 is security-relevant when a safety rule depends on the assumption (addendum).
@@ -119,7 +124,7 @@ The kit's generic facts are adopted: changed files, packages, link types, the se
 
 | Check              | Module                 | What it reports                                                                                                                                                                                                                                |
 | ------------------ | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `policy-loosening` | `checks/policy.mjs`    | Compares the `denies`, `allows`, `check` and accepted-false-positive tables of every policy test suite at the merge base and at the head, across files. Reports deny→allow moves, deny cases removed with no replacement, and new allow cases. |
+| `policy-loosening` | `checks/policy.mjs`    | Compares the `denies`, `allows`, `check` and accepted-false-positive tables of every policy test suite at the merge base and at the head, across files (at most 40 suites, each under 256 KB). Reports deny→allow moves, deny cases removed with no replacement, and new allow cases, as counts and `file:line` only, never the case text, since a loosened case may be a working bypass. Suites without case tables (loops, plain `it()`) produce nothing, and that silence is not coverage. |
 | `carve-outs`       | `checks/policy.mjs`    | Added lines in the policy that look like an exemption (`return null`, `exempt`, `strip`, `skip`, `except`, `bypass`, `SAFE_`/`NO_OP_` names), one fact per file.                                                                               |
 | `role-names`       | `checks/contracts.mjs` | `AGENTS` keys removed (and the prompts that still name them) or added (and named in no prompt).                                                                                                                                                |
 | `prompt-sections`  | `checks/contracts.mjs` | Section tags removed (marked consumer-breaking) or added in a `prompt.md`.                                                                                                                                                                     |
@@ -197,8 +202,7 @@ Mandatory security properties, inside the kit's actions. They were requested on 
 - `Skill` and `Read(./.claude-pr/**)` disallowed
 - a neutralize-PR-head step (root `CLAUDE.md`/`AGENTS.md`, `.ignore`/`.rgignore`)
 - third-party actions pinned by SHA
-- one trust SHA for facts, the model and publish
-- knowledge safe from the action's `.claude/` restore
+- one trust SHA (the PR's `base.sha`) for facts, the model's copy of the knowledge and publish. The kit moved project files to a root `.pr-review/` for this, so the action's `.claude/` restore from the base branch tip can't swap them (engine decision, 2026-10-26)
 - `validate` checks for these properties
 
 Nice to have:
@@ -227,19 +231,20 @@ Nice to have:
 | Inline cap of 10                                               | **Adapted**               | 5, because PRs arrive already reviewed.                                                            |
 | Public pointer and draft advisory                              | **Adapted**               | Kept, with a fixed area vocabulary.                                                                |
 | Self-edit High finding                                         | Adopted                   | `pull_request` runs the PR's own workflow file. It applies to the learning PR too.                 |
+| Accepted gap: a PR can edit its own workflow                   | Adopted, documented       | One collaborator, forks excluded. Agents push with Marcus's credentials, so: rotate secrets after a suspicious PR (§6). |
 | `e2e-fix/*` skip                                               | Dropped                   | There are no such branches.                                                                        |
 | Replay set and two-week trial                                  | **Adapted**               | Repo-specific replays, and the trial is also bounded by PR count.                                  |
 | Feedback learning                                              | Adopted (new)             | Owner only, `review:` replies, no auto-merge.                                                      |
 
 ## 11. Local verification (2026-10-26)
 
-- The project-check tests pass: `node --test '.claude/pr-review/checks/test/*.test.mjs'` gives 31/31.
+- The project-check tests pass: `node --test '.pr-review/checks/test/*.test.mjs'` gives 38/38. That includes a hostile-input timing test and the 256 KB size cap.
 - The kit's `validate` reports ok, and `actionlint` is clean on both workflows.
 - **Historical dry runs** (kit `local` at `85ab8f9`, knowledge from the working copy):
   - **PR #1** (`747b8a6...09f238e`) routes `role-registry`, `prompt-sections`, `prompt-bytes`, `plugin-skills`, `tool-names`, `cli-surface`, `placeholders` and `sdk-assumptions`. `tool-lists` reports the role tool sets moving to `src/agents/shared.ts`.
-  - **PR #5** (`9fe2d03...74ef64e`) routes 14 of the 16 link types and all classes. `policy-loosening` lists 49 new allow cases and no deny case moved or removed (that is accurate: PR #5 tightened, and its loosenings were new allow cases). `carve-outs` points at four files.
-  - **`36ed855`** (an intentional loosening: no-op git editors and `.env.ts`) gets a `policy-loosening` fact listing exactly those ten new allow cases, which the commit body declares.
-  - **`a945089`** (the class-2 historical bug: the message-stripping exemption that was later withdrawn) gets a `policy-loosening` fact listing the 12 commit and PR message cases that became allowed. This is the signal that would have pointed a reviewer at the carve-out. `carve-outs` didn't fire here, because the exemption's lines don't use the trigger words, so `policy-loosening` is the stronger of the two.
+  - **PR #5** (`9fe2d03...74ef64e`) routes 14 of the 16 link types and all classes. `policy-loosening` points at 49 new allow cases and finds no deny case moved or removed (that is accurate: PR #5 tightened, and its loosenings were new allow cases). `carve-outs` points at four files.
+  - **`36ed855`** (an intentional loosening: no-op git editors and `.env.ts`) gets a `policy-loosening` fact pointing at exactly those ten new allow cases (`src/permissions-round3.test.ts` lines 269–278), which the commit body declares.
+  - **`a945089`** (the class-2 historical bug: the message-stripping exemption that was later withdrawn) gets a `policy-loosening` fact pointing at the 12 commit and PR message cases (`src/permissions-round3.test.ts` lines 192 onward) that became allowed. This is the signal that would have pointed a reviewer at the carve-out. `carve-outs` didn't fire here, because the exemption's lines don't use the trigger words, so `policy-loosening` is the stronger of the two.
 - **A fixture review** on `a945089`, with a planted security finding and one Medium finding, renders the pointer as "Security-relevant issue (High) in src shell rules". Neither the planted detail nor the anchor appears anywhere in the output or the decoded ledger. Without `PR_REVIEW_ID_KEY` locally, the pointer says the details could not be delivered, as designed.
 - **Not verified locally:**
   - anything that needs GitHub (posting, advisories, the learning PR)
@@ -248,7 +253,7 @@ Nice to have:
 
 ## 12. Follow-ups
 
-- Load rules from `main` for stacked PRs (`trustRef`). It needs the kit to keep knowledge out of reach of the action's `.claude/` restore.
+- Reviewing stacked PRs at all (the engine keeps `trustRef` out; the workflow-level main-only filter is the endorsed pattern).
 - A minimal CI workflow for `pnpm typecheck && pnpm test` (Q3).
 - A test that cross-checks role names in `src/orchestrator/prompt.md` against `ROLES` (L1, flagged in PR #1).
 - Prettier protection for `plugin/**/SKILL.md` if its bytes matter for caching (L14).

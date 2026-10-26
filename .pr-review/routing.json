@@ -14,5 +14,5 @@
   { "linkType": "reserved-names", "paths": ["src/ledger.ts", "src/project-agents.ts"], "counterparts": ["src/ledger.ts", "src/project-agents.ts"], "classes": [6, 8] },
   { "linkType": "prompt-bytes", "paths": ["src/**/prompt.md", ".prettierrc", ".prettierignore", ".gitattributes"], "counterparts": [".prettierrc", ".prettierignore", ".gitattributes", "src/prompts.ts"], "classes": [7] },
   { "linkType": "policy-tests", "paths": ["src/permissions.ts", "src/permissions/**", "src/allowlist.ts", "src/permissions*.test.ts", "src/allowlist.test.ts"], "counterparts": ["src/permissions*.test.ts", "src/allowlist.test.ts", "src/permissions/**"], "classes": [1, 2, 3, 4, 10, 12] },
-  { "linkType": "review-config", "paths": [".claude/pr-review/**", ".github/workflows/pr-review.yml", ".github/workflows/pr-review-learn.yml"], "counterparts": [], "classes": [11] }
+  { "linkType": "review-config", "paths": [".pr-review/**", ".github/workflows/pr-review.yml", ".github/workflows/pr-review-learn.yml"], "counterparts": [], "classes": [11] }
 ]

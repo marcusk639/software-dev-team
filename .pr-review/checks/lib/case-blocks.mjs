@@ -1,5 +1,7 @@
 // Reads the policy test files' case tables: which command or path literals sit
-// in a deny block and which in an allow block. A heuristic over TypeScript
+// in a deny block and which in an allow block, with the line each is on. Only
+// the cases array counts (the first array argument of denies/allows/check),
+// so a reason such as denies(SAFETY("…"), [...]) is never a case. A heuristic over TypeScript
 // source with no parser dependency: it never throws, and on input it cannot
 // follow it returns what it has read so far.
 
@@ -64,6 +66,12 @@ function readRegex(src, i) {
 export function tokenize(src) {
   const tokens = [];
   let i = 0;
+  let line = 1;
+  let counted = 0;
+  const lineAt = (at) => {
+    for (; counted < at; counted++) if (src[counted] === '\n') line++;
+    return line;
+  };
   const prev = () => tokens.at(-1)?.value;
   while (i < src.length) {
     const c = src[i];
@@ -75,11 +83,11 @@ export function tokenize(src) {
       tokens.push({ type: 'regex', value: '/re/' });
     } else if (c === '"' || c === "'") {
       const [value, next] = readString(src, i);
-      tokens.push({ type: 'str', value });
+      tokens.push({ type: 'str', value, line: lineAt(i) });
       i = next;
     } else if (c === '`') {
       const [value, next] = readTemplate(src, i);
-      tokens.push(value === null ? { type: 'tpl', value: '`…`' } : { type: 'str', value });
+      tokens.push(value === null ? { type: 'tpl', value: '`…`' } : { type: 'str', value, line: lineAt(i) });
       i = next;
     } else if (/[A-Za-z_$]/.test(c)) {
       let j = i + 1;
@@ -113,7 +121,22 @@ function closeOf(tokens, start) {
   return tokens.length - 1;
 }
 
-const literalsIn = (tokens) => tokens.filter((t) => t.type === 'str' && !NOT_CASES.has(t.value)).map((t) => t.value);
+function block(verdict, tokens) {
+  const cases = tokens.filter((t) => t.type === 'str' && !NOT_CASES.has(t.value));
+  return { verdict, literals: cases.map((t) => t.value), lines: cases.map((t) => t.line) };
+}
+
+// The tokens of the first top-level argument that is an array literal.
+function casesArg(tokens) {
+  let depth = 0;
+  for (let k = 0; k < tokens.length; k++) {
+    const v = tokens[k].type === 'punct' ? tokens[k].value : null;
+    if (depth === 0 && v === '[') return tokens.slice(k + 1, closeOf(tokens, k));
+    if (v && OPEN[v]) depth++;
+    else if (v === ')' || v === ']' || v === '}') depth--;
+  }
+  return [];
+}
 
 export function caseBlocks(src) {
   try {
@@ -130,7 +153,7 @@ function blocks(tokens) {
     if (t.type !== 'id') continue;
     if (t.value === 'ACCEPTED_FALSE_POSITIVES' && tokens[k + 1]?.value === '=' && tokens[k + 2]?.value === '[') {
       const end = closeOf(tokens, k + 2);
-      out.push({ verdict: 'deny', literals: literalsIn(tokens.slice(k + 3, end)) });
+      out.push(block('deny', tokens.slice(k + 3, end)));
       k = end;
       continue;
     }
@@ -140,8 +163,8 @@ function blocks(tokens) {
     const inner = tokens.slice(k + 2, end);
     if (t.value === 'check') {
       const verdict = [...inner].reverse().find((x) => x.type === 'str' && (x.value === 'deny' || x.value === 'allow'))?.value;
-      if (verdict) out.push({ verdict, literals: literalsIn(inner) });
-    } else out.push({ verdict: t.value === 'denies' ? 'deny' : 'allow', literals: literalsIn(inner) });
+      if (verdict) out.push(block(verdict, casesArg(inner)));
+    } else out.push(block(t.value === 'denies' ? 'deny' : 'allow', casesArg(inner)));
     k = end;
   }
   return out;

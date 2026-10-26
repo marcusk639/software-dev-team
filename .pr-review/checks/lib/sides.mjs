@@ -9,10 +9,15 @@ export function baseOf({ git, baseSha, headSha }) {
   }
 }
 
-// The file at a commit, or '' when it does not exist there.
+// Files above this size are skipped: their text is PR-controlled and the
+// checks' scans should stay cheap. A skipped file reads as ''.
+export const MAX_BYTES = 256 * 1024;
+
+// The file at a commit, or '' when it does not exist there or is too large.
 export function showAt(git, sha, path) {
   if (!sha || !path) return '';
   try {
+    if (Number(git(['cat-file', '-s', `${sha}:${path}`]).trim()) > MAX_BYTES) return '';
     return git(['show', `${sha}:${path}`]);
   } catch {
     return '';

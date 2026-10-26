@@ -141,13 +141,13 @@
 
 ## review-config
 
-- `.claude/pr-review/**`, `.github/workflows/pr-review.yml` and `.github/workflows/pr-review-learn.yml` are the reviewer itself. Any change is a self-edit (the kit's procedure). Check that the workflow keeps all of these:
+- `.pr-review/**`, `.github/workflows/pr-review.yml` and `.github/workflows/pr-review-learn.yml` are the reviewer itself. Any change is a self-edit (the kit's procedure). Check that the workflow keeps all of these:
   - the main-only base filter and the `base.ref` guard
   - same-repo, draft and Dependabot guards
   - `contents: read`
   - every secret passed only to the step that needs it
   - one full kit SHA, the same in every `uses:` line
-  - SHA-pinned third-party actions
+  - `actions/checkout` pinned by SHA in both workflows (the kit pins the actions it uses internally)
 
 <!-- pr-review:learned:begin -->
 <!-- pr-review:learned:end -->
