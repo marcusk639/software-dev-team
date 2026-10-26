@@ -147,7 +147,8 @@
   - `contents: read`
   - every secret passed only to the step that needs it
   - one full kit SHA, the same in every `uses:` line
-  - `actions/checkout` pinned by SHA in both workflows (the kit pins the actions it uses internally)
+  - every `uses:` pinned by full SHA (`actions/checkout` here, the kit's internal actions inside the kit)
+  - publish receiving `trust_sha` from the review step
 
 <!-- pr-review:learned:begin -->
 <!-- pr-review:learned:end -->

@@ -120,10 +120,14 @@
       "OWNER"
     ],
     "feedbackAuthors": [
-      "marcusk639"
+      "repository-owner"
     ]
   },
   "learning": {
     "distill": "model"
-  }
+  },
+  "lightExclude": [
+    "src/**/prompt.md",
+    "plugin/**"
+  ]
 }

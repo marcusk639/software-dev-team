@@ -87,7 +87,7 @@ The kit reads everything below from the PR's `base.sha` and replaces the working
 
 | File                                                                   | Contents                                                                                                                                                                                                                   |
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config.json`                                                          | The kit config: public with the `advisory` channel, classes 1–12 (1–5 security, 11 `always` and `light`), tiers, `inline.max: 5`, checks, `trust.feedbackAuthors: ["marcusk639"]`.                                         |
+| `config.json`                                                          | The kit config: public with the `advisory` channel, classes 1–12 (1–5 security, 11 `always` and `light`), tiers, `inline.max: 5`, checks, `trust.feedbackAuthors: ["repository-owner"]`, `lightExclude`.                                         |
 | `REVIEW.md`                                                            | The addendum: operator promises instead of features, the cross-artifact pass, behavioural markdown as code, the loosening audit, the security boundary and its area vocabulary, large-PR priorities, severity calibration. |
 | `routing.json`                                                         | 16 link types: L1–L15 from brief §3 plus `review-config`. Each maps paths to counterparts and classes.                                                                                                                     |
 | `checklist.md`                                                         | Classes 1–12 (brief C1–C12): what to look for, trigger paths, evidence as commits and PRs only.                                                                                                                            |
@@ -138,7 +138,7 @@ The kit's generic facts are adopted: changed files, packages, link types, the se
 The kit's tiers are kept, with lower caps: `full` 60, `incremental-new-links` 45, `incremental` 25, `light` 10, `base-drift` 10. The draft dropped `light` and `base-drift`. The kit can't disable single tiers, and neither tier causes harm:
 
 - A prompt or skill edit is never `light`, because those paths trigger link types and light applies only to an increment with no link types.
-- `lightFiles` is narrowed to `docs/**`, images, `.txt` and the lockfile.
+- `lightFiles` is narrowed to `docs/**`, images, `.txt` and the lockfile, and `lightExclude` (`src/**/prompt.md`, `plugin/**`) makes behavioural markdown never light, even without a routed link type.
 
 The large-PR threshold is 60 files or 6,000 lines. The kit counts test lines too, so the addendum orders the reading for large PRs: facts first, then policy sources, then wiring and the ledger, then prompts, with tests last.
 
@@ -169,7 +169,7 @@ Adopted from RP §7.7 through the kit: the sticky summary with its hidden ledger
 
 Adopted from the kit (kit design §5), with these settings:
 
-- **Trusted:** `marcusk639` only. That means his 👍/👎 and his replies that start with `review:`. Edited comments, other accounts and bots don't count.
+- **Trusted:** the repository owner only (`trust.feedbackAuthors: ["repository-owner"]`, resolved at runtime to `marcusk639`). That means his 👍/👎 and his replies that start with `review:`. Edited comments, other accounts and bots don't count.
 - **Destinations:** lessons go into the managed blocks of `false-positives.md`, `conventions.md`, `checklist.md` and `contract-map.md` first, then `learned-lessons.md`.
 - **Protected:** classes 1–5 are security classes, so a 👎 never demotes them, and any lesson that narrows them is flagged for Marcus's decision.
 - **Security feedback:** feedback on security findings lives in the advisories and becomes memory only as a pattern Marcus writes himself.
@@ -194,9 +194,9 @@ See `docs/plans/pr-reviewer-runbook.md`. The order is: skeleton PR, merge, secre
 9. The feedback round trip changes behaviour on the next PR.
 10. Trial: Marcus reacts to every finding for two weeks or ten PRs, whichever is first. The target is at least 70% 👍 and no wrong Critical or High finding.
 
-## 9. What the engine must provide
+## 9. What the engine provides
 
-Mandatory security properties, inside the kit's actions. They were requested on 2026-10-26 and are not in `85ab8f9`:
+Mandatory security properties, inside the kit's actions. They were requested on 2026-10-26 and landed in the kit's P0 commit `be671da`, which both workflows pin. `validate` now requires them:
 
 - `--setting-sources user`
 - `Skill` and `Read(./.claude-pr/**)` disallowed
@@ -205,12 +205,11 @@ Mandatory security properties, inside the kit's actions. They were requested on 
 - one trust SHA (the PR's `base.sha`) for facts, the model's copy of the knowledge and publish. The kit moved project files to a root `.pr-review/` for this, so the action's `.claude/` restore from the base branch tip can't swap them (engine decision, 2026-10-26)
 - `validate` checks for these properties
 
-Nice to have:
+Still open (not in `be671da`). Until they land, project checks and the addendum stand in for them:
 
-- a secret-scan fixture allow-list
+- a secret-scan fixture allow-list (`secrets.allowPaths`/`allowPatterns` are accepted but not enforced until P1)
 - a test-excluding size measure for `largePr`
-- per-tier disable
-- `baseBranches` as config (the workflow filter does the job today)
+- a summary "Loosenings" section and a commit-subject convention target (the addendum covers both)
 
 ## 10. Adopted, adapted, dropped
 
@@ -240,7 +239,7 @@ Nice to have:
 
 - The project-check tests pass: `node --test '.pr-review/checks/test/*.test.mjs'` gives 38/38. That includes a hostile-input timing test and the 256 KB size cap.
 - The kit's `validate` reports ok, and `actionlint` is clean on both workflows.
-- **Historical dry runs** (kit `local` at `85ab8f9`, knowledge from the working copy):
+- **Historical dry runs** (kit `local` at `be671da`, knowledge from the working copy; first run at `85ab8f9`, same facts):
   - **PR #1** (`747b8a6...09f238e`) routes `role-registry`, `prompt-sections`, `prompt-bytes`, `plugin-skills`, `tool-names`, `cli-surface`, `placeholders` and `sdk-assumptions`. `tool-lists` reports the role tool sets moving to `src/agents/shared.ts`.
   - **PR #5** (`9fe2d03...74ef64e`) routes 14 of the 16 link types and all classes. `policy-loosening` points at 49 new allow cases and finds no deny case moved or removed (that is accurate: PR #5 tightened, and its loosenings were new allow cases). `carve-outs` points at four files.
   - **`36ed855`** (an intentional loosening: no-op git editors and `.env.ts`) gets a `policy-loosening` fact pointing at exactly those ten new allow cases (`src/permissions-round3.test.ts` lines 269–278), which the commit body declares.
@@ -248,7 +247,6 @@ Nice to have:
 - **A fixture review** on `a945089`, with a planted security finding and one Medium finding, renders the pointer as "Security-relevant issue (High) in src shell rules". Neither the planted detail nor the anchor appears anywhere in the output or the decoded ledger. Without `PR_REVIEW_ID_KEY` locally, the pointer says the details could not be delivered, as designed.
 - **Not verified locally:**
   - anything that needs GitHub (posting, advisories, the learning PR)
-  - the mandatory engine properties in §9, which are not yet in the pinned SHA
   - the model's actual behaviour
 
 ## 12. Follow-ups
@@ -257,4 +255,3 @@ Nice to have:
 - A minimal CI workflow for `pnpm typecheck && pnpm test` (Q3).
 - A test that cross-checks role names in `src/orchestrator/prompt.md` against `ROLES` (L1, flagged in PR #1).
 - Prettier protection for `plugin/**/SKILL.md` if its bytes matter for caching (L14).
-- Re-pin the kit to the SHA that carries the §9 properties, then re-run `validate` and the dry runs.

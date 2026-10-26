@@ -4,10 +4,11 @@
 #
 # The kit is pinned by full commit SHA, the same in every pr-review-kit
 # `uses:` line here and in pr-review-learn.yml; a tag or branch would let the
-# engine change under the pin. actions/checkout is pinned by SHA here; the
-# actions the kit uses internally are pinned inside the kit.
-# Project config, knowledge and checks come from the PR's base commit
-# (.pr-review/), never from the PR head.
+# engine change under the pin. Every action is pinned by SHA: actions/checkout
+# here, and the actions the kit uses internally inside the kit.
+# Project config, knowledge and checks (.pr-review/) come from one trust SHA,
+# the PR's base commit, which the review action resolves and hands to
+# publish; never from the PR head.
 name: PR Review
 
 on:
@@ -48,15 +49,16 @@ jobs:
       # Facts, then the sandboxed model. Gets the Claude token and nothing else.
       - name: Review
         id: review
-        uses: marcusk639/pr-review-kit/actions/review@85ab8f92d5115c49a144ea617bf56fcb73122608
+        uses: marcusk639/pr-review-kit/actions/review@be671dacb924f94e455ab2448bfa97026beee3d8
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
       # Model-free; the only step with the id key and the advisory token.
       - name: Publish
         if: always()
-        uses: marcusk639/pr-review-kit/actions/publish@85ab8f92d5115c49a144ea617bf56fcb73122608
+        uses: marcusk639/pr-review-kit/actions/publish@be671dacb924f94e455ab2448bfa97026beee3d8
         with:
+          trust_sha: ${{ steps.review.outputs.trust_sha }}
           action_outcome: ${{ steps.review.outputs.outcome }}
           execution_file: ${{ steps.review.outputs.execution_file }}
           id_key: ${{ secrets.PR_REVIEW_ID_KEY }}

@@ -12,7 +12,7 @@ Repo: `marcusk639/software-dev-team` (public, default branch `main`). Local bran
 - [ ] Run `actionlint .github/workflows/pr-review*.yml`. Expect no output.
 - [ ] `marcusk639/pr-review-kit` is pushed and public, and the pinned SHA exists on GitHub.
 
-- [ ] **Do not merge anything until both workflows are re-pinned from `85ab8f9` to the kit's P0 SHA.** `85ab8f9` lacks the mandatory security properties.
+- [x] Both workflows are pinned to the kit's P0 commit `be671dacb924f94e455ab2448bfa97026beee3d8`, which carries the mandatory security properties. Don't merge a pin older than P0.
 
 ## Standing rule: the workflow is editable by any PR
 
