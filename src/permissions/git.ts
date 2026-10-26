@@ -13,17 +13,18 @@ const GIT_OPTION_WITH_VALUE = [
   "--config-env",
   "--super-prefix",
 ];
-const GIT_GLOBAL_OPTIONS = String.raw`(?:(?:${GIT_OPTION_WITH_VALUE.join("|")})(?:\s+|=)\S+|-\S+)`;
+const GIT_GLOBAL_OPTIONS = String.raw`(?:(?:${GIT_OPTION_WITH_VALUE.join("|")})(?:[ \t]+|=)\S+|-\S+)`;
 
 /**
  * `git -C dir push`, `git -P push` and `git --literal-pathspecs push` must
  * match the same rules as `git push`, so every global option between `git`
- * and its subcommand is dropped.
+ * and its subcommand is dropped. Only spaces and tabs separate them: a
+ * newline ends the git command, so `git -C\nrm -rf x` keeps its rm.
  */
 export function normalizeGit(command: string): string {
   return command.replace(
     new RegExp(
-      String.raw`(?<![\w.-])git(?:\s+${GIT_GLOBAL_OPTIONS})+(?=\s)`,
+      String.raw`(?<![\w.-])git(?:[ \t]+${GIT_GLOBAL_OPTIONS})+(?=[ \t])`,
       "g",
     ),
     "git",

@@ -34,7 +34,7 @@ const WRAPPER = String.raw`(?:sudo|doas|time|command|builtin|exec|nohup|nice|eva
 const AT = String.raw`(?:^|[;&|(){\x60\n]\s*|(?<![\w./-])${WRAPPER}(?:\s+(?:-\S+|\d[\w.]*))*\s+)`;
 /** Leading `NAME=value` assignments, which still leave the command in place. */
 const ASSIGNMENTS = String.raw`(?:\w+=\S*\s+)*`;
-const ENDS = String.raw`\s*($|[|;&<>)}\x60])`;
+const ENDS = String.raw`[ \t]*($|[|;&<>)}\x60\n])`;
 
 /**
  * Commands that are never allowed, in any permission mode. Matched against
@@ -51,9 +51,10 @@ const HARD_DENY: Array<{
   {
     // rm as its own word, however it is reached (after a wrapper, inside
     // bash -c, path-qualified). A subcommand of git, docker and the like is
-    // a different tool: `git rm -r --cached` only untracks files.
+    // a different tool: `git rm -r --cached` only untracks files. Only a
+    // space or tab joins the two: after a newline, rm is its own command.
     pattern:
-      /(?<!\b(?:git|docker|podman|kubectl|helm)\s+)(?:^|(?<=[\s;&|({'"`]))(?:\S*\/)?\\?rm\b[^|;&\n]*\s(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?=\s|$|['"])/,
+      /(?<!\b(?:git|docker|podman|kubectl|helm)[ \t]+)(?:^|(?<=[\s;&|({'"`]))(?:\S*\/)?\\?rm\b[^|;&\n]*\s(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?=\s|$|['"])/,
     why: "recursive delete",
     // `git -C . rm -r --cached` is git's rm once -C is dropped.
     normalizedOnly: true,
