@@ -263,3 +263,32 @@ describe("I5: more commands that destroy work are hard-denied", () => {
     bash('gh pr create --title "x" --body "gh repo delete is blocked"'),
   ]);
 });
+
+describe("false positives: no-op git editors and .env.ts source files", () => {
+  allows([
+    bash("GIT_EDITOR=true git rebase --continue"),
+    bash("GIT_SEQUENCE_EDITOR=true git rebase -i HEAD~2"),
+    bash("GIT_EDITOR=: git commit --amend"),
+    bash("git -c core.editor=true rebase --continue"),
+    bash("git -c sequence.editor=true rebase -i HEAD~2"),
+    bash("git -c core.editor=: commit --amend"),
+    ["Grep", { pattern: "x", glob: "*.env.ts" }],
+    ["Grep", { pattern: "x", glob: "**/.env.d.ts" }],
+    ["Read", { file_path: "src/config/.env.ts" }],
+    bash("cat src/.env.ts"),
+  ]);
+  denies(SAFETY("changes what git runs"), [
+    bash("GIT_EDITOR=vim git commit"),
+    bash("GIT_EDITOR='sh -c id' git commit"),
+    bash("GIT_SEQUENCE_EDITOR=./x.sh git rebase -i HEAD~2"),
+    bash("git -c core.editor=./evil.sh commit --amend"),
+    bash("git -c sequence.editor='sh x' rebase -i HEAD~2"),
+  ]);
+  denies(/holds secrets|search targets files that hold secrets|reads secrets/, [
+    ["Grep", { pattern: "x", glob: "*.env.local" }],
+    ["Grep", { pattern: "x", glob: ".env.production" }],
+    ["Read", { file_path: ".env.local" }],
+    ["Read", { file_path: ".env" }],
+    bash("cat .env.production"),
+  ]);
+});

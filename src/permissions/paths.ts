@@ -7,7 +7,8 @@ import { type Family, globTargets, globToRegExp } from "./globs.js";
  * because the default macOS filesystem is: `.ENV` opens `.env`.
  */
 export const SECRET_PATH = [
-  /(^|\/)\.env(\.(?!(example|sample|template|dist)~?$)[\w.-]+)?~?$/i,
+  // `.env.ts` and `.env.d.ts` are TypeScript modules (an env schema), not dotenv files.
+  /(^|\/)\.env(\.(?!(example|sample|template|dist)~?$)(?!(d\.)?[cm]?tsx?$)[\w.-]+)?~?$/i,
   /(^|\/)\.envrc$/i,
   /(^|\/)id_(rsa|ed25519|ecdsa|dsa)$/i,
   /(^|\/)\.(ssh|aws|kube)(\/|$)/i,
@@ -31,7 +32,7 @@ export const SECRET_PATH = [
  * transcript is the leak.
  */
 export const SECRET_IN_TEXT = [
-  /(^|[\s"'=|;&(<>/*:\\{,\x60])\.env(?!\.(example|sample|template|dist)\b)(?=$|[\s"'|;&)<>.*/~,}\x60])/i,
+  /(^|[\s"'=|;&(<>/*:\\{,\x60])\.env(?!\.(example|sample|template|dist)\b)(?!\.(d\.)?[cm]?tsx?(?=$|[\s"'|;&)<>,}\x60]))(?=$|[\s"'|;&)<>.*/~,}\x60])/i,
   /(^|[\s"'=|;&(<>/:\\{,\x60])\.envrc\b/i,
   /\bid_(rsa|ed25519|ecdsa|dsa)\b(?!\.pub)/i,
   /\.(ssh|aws|kube)\//i,

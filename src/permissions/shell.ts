@@ -178,7 +178,8 @@ const HARD_DENY: Array<{
   {
     // Configuration and programs supplied through the environment.
     pattern:
-      /(?<![\w$])GIT_(?:CONFIG\w*|DIR|EXEC_PATH|SSH(?:_COMMAND)?|EXTERNAL_DIFF|EDITOR|SEQUENCE_EDITOR|ASKPASS|PROXY_COMMAND|TEMPLATE_DIR)=/,
+      // An editor of `true` or `:` only accepts the message or todo list.
+      /(?<![\w$])GIT_(?:CONFIG\w*|DIR|EXEC_PATH|SSH(?:_COMMAND)?|EXTERNAL_DIFF|ASKPASS|PROXY_COMMAND|TEMPLATE_DIR|(?:SEQUENCE_)?EDITOR(?!=['"]?(?:true|:)['"]?(?:\s|$)))=/,
     why: "changes what git runs",
   },
   {

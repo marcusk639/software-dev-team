@@ -60,6 +60,9 @@ export function expandLongOptions(command: string): string {
 const SAFE_GIT_C_KEY =
   /^(user\.(name|email)|color\.[\w.-]+|advice\.[\w-]+|core\.quotepath|init\.defaultbranch|commit\.gpgsign|tag\.gpgsign|log\.[\w-]+|pull\.rebase|column\.ui)$/i;
 
+/** An editor that only accepts what git prepared: `core.editor=true`, `sequence.editor=:`. */
+const NO_OP_EDITOR = /^(core|sequence)\.editor=(true|:)$/i;
+
 /**
  * Global options that hand git a program to run: `-c` with any key outside
  * SAFE_GIT_C_KEY (alias.*, include.path, filter.*, core.sshCommand…),
@@ -79,8 +82,11 @@ export function gitGlobalOptionReason(command: string): string | null {
         GIT_OPTION_WITH_VALUE.includes(name) && !word.includes("=");
       const value = takesValue ? (words[i + 1] ?? "") : word.slice(2);
       if (name === "-c" || (word.startsWith("-c") && !word.startsWith("--"))) {
-        const key = value.replace(/^['"]/, "").replace(/=.*/s, "");
-        if (!SAFE_GIT_C_KEY.test(key)) return "changes what git runs";
+        const setting = value.replace(/^['"]|['"]$/g, "");
+        const key = setting.replace(/=.*/s, "");
+        if (!SAFE_GIT_C_KEY.test(key) && !NO_OP_EDITOR.test(setting)) {
+          return "changes what git runs";
+        }
       }
       if (takesValue) i += 1;
     }
