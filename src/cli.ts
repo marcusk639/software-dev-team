@@ -14,6 +14,12 @@ export interface Cli {
   model?: string | undefined;
 }
 
+/** What the command line asks for, tagged so callers switch on `kind`. */
+export type ParsedArgs =
+  | ({ kind: "run" } & Cli)
+  | { kind: "help" }
+  | { kind: "roles"; cwd: string };
+
 export function usage(): string {
   return `software-dev-team — an autonomous software development team
 
@@ -58,9 +64,7 @@ The team reads and writes real files in --cwd. Point it at a project directory,
 not at this one, unless you mean for it to edit itself.`;
 }
 
-export function parseArgs(
-  argv: string[],
-): Cli | { help: true } | { roles: true; cwd: string } {
+export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   const allow: string[] = [];
   let cwd = process.cwd();
@@ -79,7 +83,7 @@ export function parseArgs(
     switch (arg) {
       case "-h":
       case "--help":
-        return { help: true };
+        return { kind: "help" };
       case "--roles":
         roles = true;
         break;
@@ -134,7 +138,7 @@ export function parseArgs(
     }
   }
 
-  if (roles) return { roles: true, cwd };
+  if (roles) return { kind: "roles", cwd };
 
   if (file !== undefined && positional.length > 0) {
     throw new Error("Give either --file or a task as text, not both.");
@@ -149,10 +153,11 @@ export function parseArgs(
     if (resume !== undefined) {
       throw new Error("--resume needs a message to send to the session.");
     }
-    return { help: true };
+    return { kind: "help" };
   }
 
   return {
+    kind: "run",
     task,
     cwd,
     autoApprove,

@@ -222,3 +222,23 @@ describe("team plugin", () => {
     }
   });
 });
+
+describe("role tool sets", () => {
+  it("gives implementers write tools and advisers read-only ones", () => {
+    const team = loadTeam();
+    const writers = ["backend-engineer", "frontend-engineer", "mobile-developer", "database-specialist", "qa-tester"];
+    for (const role of ROLES) {
+      const tools = team[role].tools ?? [];
+      if (role === "code-reviewer") {
+        assert.deepEqual(tools, ["Read", "Grep", "Glob", "Bash"], role);
+        assert.equal(team[role].maxTurns, 60, role);
+      } else if (writers.includes(role)) {
+        assert.deepEqual(tools, ["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Write", "Edit", "Bash"], role);
+        assert.equal(team[role].maxTurns, 60, role);
+      } else {
+        assert.deepEqual(tools, ["Read", "Grep", "Glob", "WebSearch", "WebFetch"], role);
+        assert.equal(team[role].maxTurns, 30, role);
+      }
+    }
+  });
+});

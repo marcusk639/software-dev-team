@@ -49,8 +49,8 @@ describe("parseArgs", () => {
   }
 
   it("--roles honours --cwd in either order", () => {
-    assert.deepEqual(parseArgs(["--roles", "--cwd", "/p"]), { roles: true, cwd: "/p" });
-    assert.deepEqual(parseArgs(["--cwd", "/p", "--roles"]), { roles: true, cwd: "/p" });
+    assert.deepEqual(parseArgs(["--roles", "--cwd", "/p"]), { kind: "roles", cwd: "/p" });
+    assert.deepEqual(parseArgs(["--cwd", "/p", "--roles"]), { kind: "roles", cwd: "/p" });
   });
 });
 
@@ -151,5 +151,14 @@ describe("checkProjectDir: the real reason a --cwd is unusable", () => {
     } finally {
       chmodSync(join(dir, "locked"), 0o700);
     }
+  });
+});
+
+describe("parseArgs: kind tag", () => {
+  it("tags each result", () => {
+    assert.equal(parseArgs(["--help"]).kind, "help");
+    assert.equal(parseArgs([]).kind, "help");
+    assert.equal(parseArgs(["--roles"]).kind, "roles");
+    assert.equal(parseArgs(["do it"]).kind, "run");
   });
 });

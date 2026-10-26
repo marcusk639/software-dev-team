@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { DEFAULT_ALLOWED_TOOLS, resolveAllowedTools } from "./allowlist.js";
-import { checkProjectDir, type Cli, parseArgs, usage } from "./cli.js";
+import { checkProjectDir, type ParsedArgs, parseArgs, usage } from "./cli.js";
 import { runOutcome } from "./outcome.js";
 import { createRenderer } from "./render.js";
 import {
@@ -17,23 +17,23 @@ const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
 
 async function main(): Promise<number> {
-  let cli: Cli | { help: true } | { roles: true; cwd: string };
+  let cli: ParsedArgs;
   try {
     cli = parseArgs(process.argv.slice(2));
     // Validated now so a bad --allow rule is a usage error, not a failure mid-run.
-    if ("task" in cli) resolveAllowedTools(DEFAULT_ALLOWED_TOOLS, cli.allow);
-    if (!("help" in cli)) checkProjectDir(cli.cwd);
+    if (cli.kind === "run") resolveAllowedTools(DEFAULT_ALLOWED_TOOLS, cli.allow);
+    if (cli.kind !== "help") checkProjectDir(cli.cwd);
   } catch (error) {
     console.error(`${(error as Error).message}\n\n${usage()}`);
     return 2;
   }
 
-  if ("help" in cli) {
+  if (cli.kind === "help") {
     console.log(usage());
     return 0;
   }
 
-  if ("roles" in cli) {
+  if (cli.kind === "roles") {
     // Loading every prompt here makes --roles a cheap check that none is
     // missing and that the project's customizations are valid.
     const customizations = loadCustomizations(cli.cwd, PROMPT_NAMES);

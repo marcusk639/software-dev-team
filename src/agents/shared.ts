@@ -51,8 +51,27 @@ export const REVIEWER = [
 export const ADVISORY_MAX_TURNS = 30;
 export const IMPLEMENTER_MAX_TURNS = 60;
 
-export const advisory = (tools: readonly string[] = READ_ONLY) => [...tools];
+/** The tools and turn cap of a role that reads and advises but changes nothing. */
+export const advisory = () => ({
+  tools: [...READ_ONLY],
+  maxTurns: ADVISORY_MAX_TURNS,
+});
 
+/** The tools and turn cap of a role that writes code and runs commands. */
+export const implementer = () => ({
+  tools: [...IMPLEMENTER],
+  maxTurns: IMPLEMENTER_MAX_TURNS,
+});
+
+/**
+ * The tools and turn cap of a reviewer: it reads and runs checks but cannot
+ * edit, and reading a diff and running checks takes as many turns as
+ * implementing one.
+ */
+export const reviewer = () => ({
+  tools: [...REVIEWER],
+  maxTurns: IMPLEMENTER_MAX_TURNS,
+});
 /**
  * The plugin shipped in this repo (plugin/), loaded into every run. Roles
  * preload its skills by `<name>:<skill>` instead of repeating a method in
