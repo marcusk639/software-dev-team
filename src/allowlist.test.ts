@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { BASE_ALLOWED_TOOLS, resolveAllowedTools } from "./allowlist.js";
+import {
+  BASE_ALLOWED_TOOLS,
+  readRootsFromAllowRules,
+  resolveAllowedTools,
+} from "./allowlist.js";
 
 describe("resolveAllowedTools", () => {
   it("always includes the base tools", () => {
@@ -60,5 +64,24 @@ describe("resolveAllowedTools", () => {
 describe("MultiEdit needs a specifier", () => {
   it("rejects a bare MultiEdit rule", () => {
     assert.throws(() => resolveAllowedTools([], ["MultiEdit"]));
+  });
+});
+
+describe("readRootsFromAllowRules", () => {
+  it("reads absolute and home directories from Read/Grep/Glob rules", () => {
+    assert.deepEqual(
+      readRootsFromAllowRules(
+        [
+          "Read(//Users/me/notes/**)",
+          "Grep(/opt/docs/**)",
+          "Glob(~/shared/*)",
+          "Read(src/**)",
+          "Read(/tmp/*/x/**)",
+          "Bash(cat:*)",
+        ],
+        "/home/me",
+      ),
+      ["/Users/me/notes", "/opt/docs", "/home/me/shared"],
+    );
   });
 });

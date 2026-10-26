@@ -1,7 +1,11 @@
 import { fileURLToPath } from "node:url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { DEFAULT_ALLOWED_TOOLS, resolveAllowedTools } from "../allowlist.js";
+import {
+  DEFAULT_ALLOWED_TOOLS,
+  readRootsFromAllowRules,
+  resolveAllowedTools,
+} from "../allowlist.js";
 import { createLedger, type LedgerEntry } from "../ledger.js";
 import {
   createPermissionGate,
@@ -98,6 +102,10 @@ export async function runTeam(options: RunOptions): Promise<RunSummary> {
     cwd: options.cwd,
     agents: [...ROLES, ...projectAgentNames(options.cwd)],
     pinnedModels: ROLES.filter((role) => AGENTS[role].model !== undefined),
+    readRoots: readRootsFromAllowRules(options.allow ?? []),
+    // Without --yes a human answers prompts, so a read outside --cwd is put
+    // to them; unattended, it is denied.
+    interactive: !options.autoApprove,
   });
   const ledger = createLedger({
     cwd: policy.cwd,

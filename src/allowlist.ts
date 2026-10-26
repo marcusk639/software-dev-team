@@ -16,6 +16,8 @@
  *   "mcp__server__tool"
  */
 
+import { homedir } from "node:os";
+
 /**
  * Granted on every run. The native CLI hides Grep and Glob unless they are
  * allow-listed, which left the read-only roles with no way to search.
@@ -57,6 +59,29 @@ function validate(rule: string): string {
     );
   }
   return trimmed;
+}
+
+/**
+ * Directories that Read, Grep or Glob allow rules name, e.g.
+ * "Read(//Users/me/notes/**)" or "Grep(~/docs/**)". Reads there need no
+ * approval even though they are outside --cwd. A leading `//` or `/` is an
+ * absolute path, `~/` the home directory; a specifier with wildcards before
+ * its last segment names no single directory and is ignored.
+ */
+export function readRootsFromAllowRules(
+  rules: readonly string[],
+  home: string = homedir(),
+): string[] {
+  return rules.flatMap((rule) => {
+    const match = /^(?:Read|Grep|Glob)\((.+)\)$/s.exec(rule.trim());
+    if (!match) return [];
+    let path = match[1]!.trim().replace(/\/\*\*?$|\*\*$/, "");
+    if (path.startsWith("~/") || path === "~") path = home + path.slice(1);
+    else if (path.startsWith("//")) path = path.slice(1);
+    else if (!path.startsWith("/")) return [];
+    if (/[?*[{]/.test(path)) return [];
+    return [path.replace(/\/+$/, "") || "/"];
+  });
 }
 
 export function resolveAllowedTools(
