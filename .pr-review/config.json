@@ -23,27 +23,32 @@
     {
       "id": 1,
       "name": "Alternate shell spelling slips past a deny rule",
-      "security": true
+      "security": true,
+      "protected": true
     },
     {
       "id": 2,
       "name": "A carve-out in a deny check opens a hole",
-      "security": true
+      "security": true,
+      "protected": true
     },
     {
       "id": 3,
       "name": "Path confinement and resolution",
-      "security": true
+      "security": true,
+      "protected": true
     },
     {
       "id": 4,
       "name": "Fail-open on unexpected input",
-      "security": true
+      "security": true,
+      "protected": true
     },
     {
       "id": 5,
       "name": "One rule family updated in one tool but not the others",
-      "security": true
+      "security": true,
+      "protected": true
     },
     {
       "id": 6,
@@ -113,7 +118,12 @@
     "project": [
       "checks/policy.mjs",
       "checks/contracts.mjs"
-    ]
+    ],
+    "writeCollaborators": {
+      "allowed": [
+        "repository-owner"
+      ]
+    }
   },
   "trust": {
     "contextAssociations": [
@@ -124,10 +134,23 @@
     ]
   },
   "learning": {
-    "distill": "model"
+    "distill": "model",
+    "commands": {
+      "format": [
+        "npx --yes prettier@3.9.10 --write {files}"
+      ],
+      "validate": [
+        "node --test '.pr-review/checks/test/*.test.mjs'"
+      ]
+    }
   },
   "lightExclude": [
     "src/**/prompt.md",
     "plugin/**"
-  ]
+  ],
+  "secrets": {
+    "allowPatterns": [
+      "^sk-ant-test-[0-9a-f]{8,32}$"
+    ]
+  }
 }

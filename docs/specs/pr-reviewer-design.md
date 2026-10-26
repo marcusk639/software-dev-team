@@ -71,6 +71,7 @@ All of RP §5 applies. These matter most here:
   - `actions/checkout` pinned to the `v4.4.0` commit SHA
   - the kit's `review` and `publish` actions pinned to one full SHA
   - a 30-minute timeout
+  - `closed` in the trigger types, with the kit's guard `(github.event.action != 'closed' || github.event.pull_request.merged)`: a merged PR gets one last look if its final head was never reviewed (tier `none` otherwise), and a PR closed without merging is skipped
 
   Everything else is adopted from RP §7.1 through the kit:
   - triggers, concurrency and permissions
@@ -87,7 +88,7 @@ The kit reads everything below from the PR's `base.sha` and replaces the working
 
 | File                                                                   | Contents                                                                                                                                                                                                                   |
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config.json`                                                          | The kit config: public with the `advisory` channel, classes 1–12 (1–5 security, 11 `always` and `light`), tiers, `inline.max: 5`, checks, `trust.feedbackAuthors: ["repository-owner"]`, `lightExclude`.                                         |
+| `config.json`                                                          | The kit config: public with the `advisory` channel, classes 1–12 (1–5 security, 11 `always` and `light`), tiers, `inline.max: 5`, checks, `trust.feedbackAuthors: ["repository-owner"]`, `lightExclude`, classes 1–5 `protected`, `secrets.allowPatterns` for test fixtures, `checks.writeCollaborators` (owner only), `learning.commands`.                                         |
 | `REVIEW.md`                                                            | The addendum: operator promises instead of features, the cross-artifact pass, behavioural markdown as code, the loosening audit, the security boundary and its area vocabulary, large-PR priorities, severity calibration. |
 | `routing.json`                                                         | 16 link types: L1–L15 from brief §3 plus `review-config`. Each maps paths to counterparts and classes.                                                                                                                     |
 | `checklist.md`                                                         | Classes 1–12 (brief C1–C12): what to look for, trigger paths, evidence as commits and PRs only.                                                                                                                            |
@@ -131,7 +132,7 @@ The kit's generic facts are adopted: changed files, packages, link types, the se
 | `sdk-pin`          | `checks/contracts.mjs` | A change to the SDK version, and the files that still name the old one.                                                                                                                                                                        |
 | `tool-lists`       | `checks/contracts.mjs` | Membership changes in `ToolName` and the tool lists in `src/tools.ts`, `src/agents/shared.ts` and `src/permissions.ts`.                                                                                                                        |
 
-**Secret-scan fixtures.** The kit has no fixture allow-list, so the `sk-ant-test-…` values in the policy tests will raise `secrets` facts. `false-positives.md` tells the model they are fixtures. The redaction still applies to anything posted.
+**Secret-scan fixtures.** `secrets.allowPatterns` skips the fake `sk-ant-test-<hex>` credentials the policy tests use (`^sk-ant-test-[0-9a-f]{8,32}$`, matched against the secret text only, so a real key in a test file is still flagged; real Anthropic keys never have the `sk-ant-test-` prefix). Verified on `8746b35`: one `secrets` fact without the pattern, none with it.
 
 ### 7.5 Tiers
 
@@ -173,7 +174,8 @@ Adopted from the kit (kit design §5), with these settings:
 - **Destinations:** lessons go into the managed blocks of `false-positives.md`, `conventions.md`, `checklist.md` and `contract-map.md` first, then `learned-lessons.md`.
 - **Protected:** classes 1–5 are security classes, so a 👎 never demotes them, and any lesson that narrows them is flagged for Marcus's decision.
 - **Security feedback:** feedback on security findings lives in the advisories and becomes memory only as a pattern Marcus writes himself.
-- **Merge:** no auto-merge. There is one weekly learning PR, with no author or branch exemption from the self-edit finding, and no PAT or dispatched CI on it.
+- **Merge:** no auto-merge. There is one weekly learning PR, with no PAT or dispatched CI on it. It has no author or branch exemption from the self-edit finding: the kit (from `74c155b`) replaces that finding with a `learning-pr` fact only when every commit is by `github-actions[bot]` and every change stays inside the managed blocks and `learned/*.json`. Anything else still gets the High self-edit finding.
+- **Learn-job commands:** `format` runs `npx --yes prettier@3.9.10 --write {files}` (the version Marcus's local format-on-edit hook uses, so learning-PR markdown matches hand edits), and `validate` runs the project-check tests. If either fails, nothing is proposed.
 - **Formatting:** the repo has no formatter or doc checks of its own (Prettier runs only through Marcus's local hook), so the learn job has nothing project-specific to run beyond the kit's own validation.
 - **Seed:** learned memory starts empty, and the rulings already made are in `false-positives.md`.
 
@@ -196,7 +198,7 @@ See `docs/plans/pr-reviewer-runbook.md`. The order is: skeleton PR, merge, secre
 
 ## 9. What the engine provides
 
-Mandatory security properties, inside the kit's actions. They were requested on 2026-10-26 and landed in the kit's P0 commit `be671da`, which both workflows pin. `validate` now requires them:
+Mandatory security properties, inside the kit's actions. They were requested on 2026-10-26 and landed in the kit's P0 commit `be671da`. Both workflows now pin `74c155b` (P1 and P2, no breaking changes). `validate` now requires them:
 
 - `--setting-sources user`
 - `Skill` and `Read(./.claude-pr/**)` disallowed
@@ -205,9 +207,9 @@ Mandatory security properties, inside the kit's actions. They were requested on 
 - one trust SHA (the PR's `base.sha`) for facts, the model's copy of the knowledge and publish. The kit moved project files to a root `.pr-review/` for this, so the action's `.claude/` restore from the base branch tip can't swap them (engine decision, 2026-10-26)
 - `validate` checks for these properties
 
-Still open (not in `be671da`). Until they land, project checks and the addendum stand in for them:
+Still open (not in `74c155b`). Until they land, project checks and the addendum stand in for them:
 
-- a secret-scan fixture allow-list (`secrets.allowPaths`/`allowPatterns` are accepted but not enforced until P1)
+- P0.1: project checks in an isolated child process, `ctx.mergeBase`, model writes limited to named files, redacted check notes, a default-branch guard on learning. **A precondition for enabling the reviewer** (runbook step 0).
 - a test-excluding size measure for `largePr`
 - a summary "Loosenings" section and a commit-subject convention target (the addendum covers both)
 
@@ -239,7 +241,7 @@ Still open (not in `be671da`). Until they land, project checks and the addendum 
 
 - The project-check tests pass: `node --test '.pr-review/checks/test/*.test.mjs'` gives 38/38. That includes a hostile-input timing test and the 256 KB size cap.
 - The kit's `validate` reports ok, and `actionlint` is clean on both workflows.
-- **Historical dry runs** (kit `local` at `be671da`, knowledge from the working copy; first run at `85ab8f9`, same facts):
+- **Historical dry runs** (kit `local` at `74c155b`, knowledge from the working copy; earlier runs at `85ab8f9` and `be671da` gave the same facts):
   - **PR #1** (`747b8a6...09f238e`) routes `role-registry`, `prompt-sections`, `prompt-bytes`, `plugin-skills`, `tool-names`, `cli-surface`, `placeholders` and `sdk-assumptions`. `tool-lists` reports the role tool sets moving to `src/agents/shared.ts`.
   - **PR #5** (`9fe2d03...74ef64e`) routes 14 of the 16 link types and all classes. `policy-loosening` points at 49 new allow cases and finds no deny case moved or removed (that is accurate: PR #5 tightened, and its loosenings were new allow cases). `carve-outs` points at four files.
   - **`36ed855`** (an intentional loosening: no-op git editors and `.env.ts`) gets a `policy-loosening` fact pointing at exactly those ten new allow cases (`src/permissions-round3.test.ts` lines 269–278), which the commit body declares.

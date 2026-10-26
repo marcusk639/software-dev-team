@@ -13,7 +13,7 @@ name: PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    types: [opened, synchronize, ready_for_review, reopened, closed]
     # Only PRs into main. A stacked PR's base is a feature branch an agent
     # can push to, and the reviewer's rules would come from it (spec §7.1).
     branches: [main]
@@ -24,10 +24,13 @@ concurrency:
 
 jobs:
   review:
-    # Skip drafts, forks (their runs get no secrets), Dependabot (likewise)
-    # and PRs whose base is not main (a PR retargeted after opening).
+    # Skip drafts, forks (their runs get no secrets), Dependabot (likewise),
+    # PRs whose base is not main (a PR retargeted after opening) and PRs
+    # closed without merging. A merged PR whose head was already reviewed
+    # gets tier none.
     if: >-
-      ${{ !github.event.pull_request.draft
+      ${{ (github.event.action != 'closed' || github.event.pull_request.merged)
+      && !github.event.pull_request.draft
       && github.actor != 'dependabot[bot]'
       && github.event.pull_request.head.repo.full_name == github.repository
       && github.event.pull_request.base.ref == 'main' }}
@@ -49,14 +52,14 @@ jobs:
       # Facts, then the sandboxed model. Gets the Claude token and nothing else.
       - name: Review
         id: review
-        uses: marcusk639/pr-review-kit/actions/review@be671dacb924f94e455ab2448bfa97026beee3d8
+        uses: marcusk639/pr-review-kit/actions/review@74c155b21f81b3154ae5347580760c78ed681810
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
       # Model-free; the only step with the id key and the advisory token.
       - name: Publish
         if: always()
-        uses: marcusk639/pr-review-kit/actions/publish@be671dacb924f94e455ab2448bfa97026beee3d8
+        uses: marcusk639/pr-review-kit/actions/publish@74c155b21f81b3154ae5347580760c78ed681810
         with:
           trust_sha: ${{ steps.review.outputs.trust_sha }}
           action_outcome: ${{ steps.review.outputs.outcome }}

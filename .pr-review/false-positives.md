@@ -32,7 +32,7 @@ The Bash checks are pattern matching, not a sandbox (the `<safety>` section of `
 - `settingSources: ["project"]` in `src/orchestrator/index.ts` loads the target repo's hooks and MCP servers. It is a documented trust boundary ("Point --cwd at repos you trust").
 - The undocumented built-in-agents env var in `src/orchestrator/index.ts` is used knowingly. The delegation guard enforces the same thing either way.
 - The judge roles (qa-tester, code-reviewer, architect) run on opus. The cost is intended (`e3ef368`).
-- The policy test suites contain fake credentials, such as an `sk-ant-test-…` value and a short `ghp_…` value, and they write `.env` files into temp projects. These are fixtures. A `secrets` fact on a `src/**/*.test.ts` line holding such a value is not a leak. A real-looking credential outside the tests still is.
+- The policy test suites contain fake credentials, such as an `sk-ant-test-…` value and a short `ghp_…` value, and they write `.env` files into temp projects. These are fixtures. The secret scan already skips `sk-ant-test-<hex>` values (`secrets.allowPatterns`). Any other `secrets` fact on a test line still needs a look, and a real-looking credential anywhere is still a finding.
 - `docs/reports/*.md` describe older commits (their header says so). Don't report them as stale.
 - PR #3 is a byte-identical re-landing of PR #2.
 - `src/permissions/shell.ts` and other large files: the repo has no file-size rule.

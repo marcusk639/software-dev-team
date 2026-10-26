@@ -12,7 +12,7 @@ Repo: `marcusk639/software-dev-team` (public, default branch `main`). Local bran
 - [ ] Run `actionlint .github/workflows/pr-review*.yml`. Expect no output.
 - [ ] `marcusk639/pr-review-kit` is pushed and public, and the pinned SHA exists on GitHub.
 
-- [x] Both workflows are pinned to the kit's P0 commit `be671dacb924f94e455ab2448bfa97026beee3d8`, which carries the mandatory security properties. Don't merge a pin older than P0.
+- [x] Both workflows are pinned to kit `74c155b21f81b3154ae5347580760c78ed681810` (P1 and P2, on top of the P0 security properties in `be671da`). Don't merge a pin older than P0.
 - [ ] **Precondition for enabling the reviewer: re-pin both workflows to the kit's P0.1 release.** P0.1 runs project checks in an isolated child process (no `GH_TOKEN`, empty cwd, hard kill timeout), adds a `parseOnly` helper, limits model writes to the named output files, redacts check notes, and adds a default-branch guard to the learn workflow. After re-pinning, re-run `validate`, `actionlint`, the check tests and the four historical dry runs. Confirm that `policy-loosening` and the `contracts.mjs` checks still work in the isolated process: they call the `git` helper (`merge-base`, `show`, `ls-tree`, `grep`, `cat-file`), so if P0.1 drops or restricts it, port them to `readHead`/`readBase`/`listFiles`.
 
 ## Standing rule: the workflow is editable by any PR
