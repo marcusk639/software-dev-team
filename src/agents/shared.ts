@@ -1,4 +1,5 @@
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
+import type { ToolName } from "../tools.js";
 
 /** An agent's definition minus its prompt text, which lives in a markdown file. */
 export interface AgentSpec
@@ -21,16 +22,26 @@ export const READ_ONLY = [
   "Glob",
   "WebSearch",
   "WebFetch",
-] as const;
+] as const satisfies readonly ToolName[];
 
-export const IMPLEMENTER = [...READ_ONLY, "Write", "Edit", "Bash"] as const;
+export const IMPLEMENTER = [
+  ...READ_ONLY,
+  "Write",
+  "Edit",
+  "Bash",
+] as const satisfies readonly ToolName[];
 
 /**
  * A reviewer reads the change and runs checks (git diff, the type check, the
  * tests) but cannot edit, so its findings and the engineer's fix stay separate
  * artifacts. No web tools: the review is of the repository.
  */
-export const REVIEWER = ["Read", "Grep", "Glob", "Bash"] as const;
+export const REVIEWER = [
+  "Read",
+  "Grep",
+  "Glob",
+  "Bash",
+] as const satisfies readonly ToolName[];
 
 /**
  * Turn caps per delegation. The manager's --max-turns does not bound a
@@ -40,8 +51,27 @@ export const REVIEWER = ["Read", "Grep", "Glob", "Bash"] as const;
 export const ADVISORY_MAX_TURNS = 30;
 export const IMPLEMENTER_MAX_TURNS = 60;
 
-export const advisory = (tools: readonly string[] = READ_ONLY) => [...tools];
+/** The tools and turn cap of a role that reads and advises but changes nothing. */
+export const advisory = () => ({
+  tools: [...READ_ONLY],
+  maxTurns: ADVISORY_MAX_TURNS,
+});
 
+/** The tools and turn cap of a role that writes code and runs commands. */
+export const implementer = () => ({
+  tools: [...IMPLEMENTER],
+  maxTurns: IMPLEMENTER_MAX_TURNS,
+});
+
+/**
+ * The tools and turn cap of a reviewer: it reads and runs checks but cannot
+ * edit, and reading a diff and running checks takes as many turns as
+ * implementing one.
+ */
+export const reviewer = () => ({
+  tools: [...REVIEWER],
+  maxTurns: IMPLEMENTER_MAX_TURNS,
+});
 /**
  * The plugin shipped in this repo (plugin/), loaded into every run. Roles
  * preload its skills by `<name>:<skill>` instead of repeating a method in

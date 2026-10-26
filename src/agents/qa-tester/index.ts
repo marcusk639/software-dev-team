@@ -1,4 +1,4 @@
-import { IMPLEMENTER_MAX_TURNS, advisory, IMPLEMENTER, type AgentSpec } from "../shared.js";
+import { implementer, type AgentSpec } from "../shared.js";
 
 export const agent: AgentSpec = {
   description:
@@ -9,7 +9,6 @@ export const agent: AgentSpec = {
   // GPT-4-class capacity deliberately. Implementers stay on sonnet: route cheap for
   // mechanical, spec-complete work, never for the thing that catches error.
   model: "opus",
-  tools: advisory([...IMPLEMENTER]),
-  maxTurns: IMPLEMENTER_MAX_TURNS,
+  ...implementer(),
   promptFile: new URL("./prompt.md", import.meta.url),
 };

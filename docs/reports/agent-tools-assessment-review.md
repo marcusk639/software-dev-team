@@ -1,5 +1,7 @@
 # Review of the agent tools assessment
 
+> **Snapshot.** This report describes the code at commit 09f238e. The safety hook, ledger and CLI have changed since (PR #2 and its review fixes), so check claims about current behavior against the source.
+
 Reviewed: `docs/reports/agent-tools-assessment.md`, judged against `docs/prompts/agent-tools-assessment.md`, at commit `09f238e` with `@anthropic-ai/claude-agent-sdk` 0.3.283. SDK line citations are to `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` (`sdk.d.ts`) and `sdk-tools.d.ts`. "Binary" means the bundled CLI at `node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-darwin-arm64@0.3.283/.../claude` (CLI version string `2.1.283`), searched with `strings`. For every binary claim below I give the literal text to search for, so the owner can reproduce it with `strings <binary> | grep -F '<literal>'`. No paid API call was made.
 
 ---

@@ -47,6 +47,34 @@ describe("loadOrchestratorPrompt", () => {
     );
     assert.match(prompt, /Use \{\{handlebars\}\} templates\.$/);
   });
+
+  it("keeps literal braces in a replaced section and still fills the roster", () => {
+    const prompt = loadOrchestratorPrompt(
+      new Map([
+        [
+          "orchestrator",
+          {
+            sections: {
+              quality_bar: "Templates use {{ name }} and {{x}}; a lone }} too.",
+              team: "Our team:\n{{roster}}",
+            },
+          },
+        ],
+      ]),
+    );
+    assert.match(prompt, /<quality_bar>\nTemplates use \{\{ name \}\} and \{\{x\}\}; a lone \}\} too\.\n<\/quality_bar>/);
+    assert.match(prompt, /<team>\nOur team:\n- product-manager: /);
+  });
+
+  it("still rejects a section override that drops the roster", () => {
+    assert.throws(
+      () =>
+        loadOrchestratorPrompt(
+          new Map([["orchestrator", { sections: { team: "{{literal}} only" } }]]),
+        ),
+      /\{\{roster\}\}/,
+    );
+  });
 });
 
 describe("team conventions", () => {
@@ -192,5 +220,50 @@ describe("team plugin", () => {
     for (const part of ["CRITICAL", "confidence", "85", "lowest score", "re-review"]) {
       assert.match(text, new RegExp(part, "i"), `code-review skill lacks ${part}`);
     }
+  });
+});
+
+describe("role tool sets", () => {
+  it("gives implementers write tools and advisers read-only ones", () => {
+    const team = loadTeam();
+    const writers = ["backend-engineer", "frontend-engineer", "mobile-developer", "database-specialist", "qa-tester"];
+    for (const role of ROLES) {
+      const tools = team[role].tools ?? [];
+      if (role === "code-reviewer") {
+        assert.deepEqual(tools, ["Read", "Grep", "Glob", "Bash"], role);
+        assert.equal(team[role].maxTurns, 60, role);
+      } else if (writers.includes(role)) {
+        assert.deepEqual(tools, ["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Write", "Edit", "Bash"], role);
+        assert.equal(team[role].maxTurns, 60, role);
+      } else {
+        assert.deepEqual(tools, ["Read", "Grep", "Glob", "WebSearch", "WebFetch"], role);
+        assert.equal(team[role].maxTurns, 30, role);
+      }
+    }
+  });
+});
+
+describe("prompts describe what the harness enforces (I10)", () => {
+  it("tells the manager about the harness record and the two kinds of stop", () => {
+    const prompt = loadOrchestratorPrompt();
+    assert.doesNotMatch(prompt, /even though you have the tools/);
+    assert.match(prompt, /harness lets you only read, plan and delegate/);
+    assert.match(prompt, /harness record of what that specialist ran/);
+    assert.match(prompt, /no allow rule can unlock it/);
+  });
+
+  it("tells specialists the write check covers file tools and the shell check is best-effort", () => {
+    const prompt = loadTeam()["qa-tester"].prompt;
+    assert.match(prompt, /file-tool writes outside the project/);
+    assert.match(prompt, /best-effort/);
+    assert.match(prompt, /safety layer blocked can't be approved/);
+  });
+});
+
+describe("orchestrator prompt wording (round 2)", () => {
+  it("names the file-tool write boundary and judges a command by its last run", () => {
+    const prompt = loadOrchestratorPrompt();
+    assert.match(prompt, /a file-tool write outside the project/);
+    assert.match(prompt, /whose last recorded run failed/);
   });
 });

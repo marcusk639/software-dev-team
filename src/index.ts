@@ -1,6 +1,11 @@
 #!/usr/bin/env node
-import { DEFAULT_ALLOWED_TOOLS, resolveAllowedTools } from "./allowlist.js";
-import { checkProjectDir, type Cli, parseArgs, usage } from "./cli.js";
+import {
+  allowRuleWarnings,
+  DEFAULT_ALLOWED_TOOLS,
+  resolveAllowedTools,
+} from "./allowlist.js";
+import { checkProjectDir, type ParsedArgs, parseArgs, usage } from "./cli.js";
+import { runOutcome } from "./outcome.js";
 import { createRenderer } from "./render.js";
 import {
   loadOrchestratorPrompt,
@@ -8,6 +13,7 @@ import {
   PROMPT_NAMES,
   runTeam,
 } from "./orchestrator/index.js";
+import { loadProjectAgents } from "./project-agents.js";
 import { CUSTOMIZATION_DIR, loadCustomizations } from "./prompts.js";
 import { AGENTS, loadTeam, ROLES, TEAM_CONVENTIONS } from "./team.js";
 
@@ -15,23 +21,31 @@ const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
 
 async function main(): Promise<number> {
-  let cli: Cli | { help: true } | { roles: true; cwd: string };
+  let cli: ParsedArgs;
   try {
     cli = parseArgs(process.argv.slice(2));
     // Validated now so a bad --allow rule is a usage error, not a failure mid-run.
-    if ("task" in cli) resolveAllowedTools(DEFAULT_ALLOWED_TOOLS, cli.allow);
-    if (!("help" in cli)) checkProjectDir(cli.cwd);
+    if (cli.kind === "run") {
+      resolveAllowedTools(DEFAULT_ALLOWED_TOOLS, cli.allow);
+      for (const warning of allowRuleWarnings([
+        ...DEFAULT_ALLOWED_TOOLS,
+        ...cli.allow,
+      ])) {
+        console.error(`${DIM}${warning}${RESET}`);
+      }
+    }
+    if (cli.kind !== "help") checkProjectDir(cli.cwd);
   } catch (error) {
     console.error(`${(error as Error).message}\n\n${usage()}`);
     return 2;
   }
 
-  if ("help" in cli) {
+  if (cli.kind === "help") {
     console.log(usage());
     return 0;
   }
 
-  if ("roles" in cli) {
+  if (cli.kind === "roles") {
     // Loading every prompt here makes --roles a cheap check that none is
     // missing and that the project's customizations are valid.
     const customizations = loadCustomizations(cli.cwd, PROMPT_NAMES);
@@ -57,6 +71,14 @@ async function main(): Promise<number> {
         `${role}  [${AGENTS[role].model ?? "default"}]${status(role)}\n  ${AGENTS[role].description}\n`,
       );
     }
+    // The same checks a run applies, so a rejected agent shows up here first.
+    const project = loadProjectAgents(cli.cwd);
+    for (const agent of project.agents) {
+      console.log(
+        `${agent.name}  [${agent.model ?? "default"}]  ${DIM}(project agent from .claude/agents)${RESET}\n`,
+      );
+    }
+    for (const warning of project.warnings) console.error(warning);
     return 0;
   }
 
@@ -87,11 +109,15 @@ async function main(): Promise<number> {
     maxBudgetUsd: cli.maxBudgetUsd,
     model: cli.model,
     onMessage: createRenderer({ verbose: cli.verbose }),
+    onWarning: (warning) => console.error(`${DIM}${warning}${RESET}`),
   });
 
   if (summary.ledgerText) {
     console.log(`\n${DIM}What actually ran in this run:\n${summary.ledgerText}${RESET}`);
   }
+
+  const outcome = runOutcome(summary, cli.strict);
+  if (outcome.warning) console.error(`\n${outcome.warning}`);
 
   if (summary.isError) console.error(`\n${summary.result}`);
 
@@ -101,7 +127,7 @@ async function main(): Promise<number> {
       `\nSession: ${summary.sessionId}\n${DIM}Continue it with --resume ${summary.sessionId} "<message>" (same --cwd).${RESET}`,
     );
   }
-  return summary.isError ? 1 : 0;
+  return outcome.code;
 }
 
 /**

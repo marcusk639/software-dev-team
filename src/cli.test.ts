@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkProjectDir, parseArgs } from "./cli.js";
+import { checkProjectDir, parseArgs, usage } from "./cli.js";
 
 describe("parseArgs", () => {
   it("collects repeated --allow rules", () => {
@@ -49,8 +49,8 @@ describe("parseArgs", () => {
   }
 
   it("--roles honours --cwd in either order", () => {
-    assert.deepEqual(parseArgs(["--roles", "--cwd", "/p"]), { roles: true, cwd: "/p" });
-    assert.deepEqual(parseArgs(["--cwd", "/p", "--roles"]), { roles: true, cwd: "/p" });
+    assert.deepEqual(parseArgs(["--roles", "--cwd", "/p"]), { kind: "roles", cwd: "/p" });
+    assert.deepEqual(parseArgs(["--cwd", "/p", "--roles"]), { kind: "roles", cwd: "/p" });
   });
 });
 
@@ -112,5 +112,61 @@ describe("parseArgs: defaults and empty input", () => {
     const file = join(mkdtempSync(join(tmpdir(), "sdt-cli-")), "task.md");
     writeFileSync(file, "  \n");
     assert.throws(() => parseArgs(["--file", file]), /is empty/);
+  });
+});
+
+describe("--strict", () => {
+  it("turns on strict exit codes", () => {
+    const cli = parseArgs(["--strict", "task"]);
+    assert.ok("task" in cli);
+    assert.equal(cli.strict, true);
+  });
+
+  it("is off by default", () => {
+    const cli = parseArgs(["task"]);
+    assert.ok("task" in cli);
+    assert.equal(cli.strict, false);
+  });
+});
+
+describe("checkProjectDir: the real reason a --cwd is unusable", () => {
+  it("names ENOENT for a path that does not exist", () => {
+    assert.throws(() => checkProjectDir(join(tmpdir(), "sdt-no-such-dir-y")), /ENOENT/);
+  });
+
+  it("names ELOOP for a symlink loop", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sdt-cli-"));
+    symlinkSync(join(dir, "b"), join(dir, "a"));
+    symlinkSync(join(dir, "a"), join(dir, "b"));
+    assert.throws(() => checkProjectDir(join(dir, "a")), /ELOOP/);
+  });
+
+  it("names EACCES for a directory it may not enter", { skip: process.getuid?.() === 0 }, () => {
+    const dir = mkdtempSync(join(tmpdir(), "sdt-cli-"));
+    mkdirSync(join(dir, "locked"));
+    mkdirSync(join(dir, "locked", "inner"));
+    chmodSync(join(dir, "locked"), 0o000);
+    try {
+      assert.throws(() => checkProjectDir(join(dir, "locked", "inner")), /EACCES/);
+    } finally {
+      chmodSync(join(dir, "locked"), 0o700);
+    }
+  });
+});
+
+describe("parseArgs: kind tag", () => {
+  it("tags each result", () => {
+    assert.equal(parseArgs(["--help"]).kind, "help");
+    assert.equal(parseArgs([]).kind, "help");
+    assert.equal(parseArgs(["--roles"]).kind, "roles");
+    assert.equal(parseArgs(["do it"]).kind, "run");
+  });
+});
+
+describe("usage: --yes names what acceptEdits approves", () => {
+  it("lists the commands acceptEdits runs without asking (SDK 0.3.283)", () => {
+    const text = usage().replace(/\s+/g, " ");
+    assert.match(text, /mkdir, touch, rm, rmdir, mv, cp, sed/);
+    assert.match(text, /rm, rmdir and sed included/);
   });
 });

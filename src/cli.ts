@@ -5,12 +5,20 @@ export interface Cli {
   cwd: string;
   autoApprove: boolean;
   verbose: boolean;
+  /** Exit non-zero when the ledger records calls to check, even if the run succeeded. */
+  strict: boolean;
   allow: string[];
   resume?: string | undefined;
   maxTurns?: number | undefined;
   maxBudgetUsd?: number | undefined;
   model?: string | undefined;
 }
+
+/** What the command line asks for, tagged so callers switch on `kind`. */
+export type ParsedArgs =
+  | ({ kind: "run" } & Cli)
+  | { kind: "help" }
+  | { kind: "roles"; cwd: string };
 
 export function usage(): string {
   return `software-dev-team — an autonomous software development team
@@ -24,9 +32,11 @@ export function usage(): string {
 Options
   --cwd <path>        project the team works in (default: current directory)
   --file <path>       read the task from a file instead of the command line
-  -y, --yes           run unattended: file edits inside --cwd are approved, Bash
-                      not allowed by --allow is refused, and destructive commands
-                      stay blocked either way
+  -y, --yes           run unattended: file edits inside --cwd and the commands
+                      acceptEdits approves (mkdir, touch, rm, rmdir, mv, cp,
+                      sed) run without asking; other Bash not allowed by
+                      --allow is refused. The safety hook still screens all
+                      of it, rm, rmdir and sed included.
   --allow <rule>      let a tool run without approval, e.g. "Bash(pnpm test:*)";
                       repeatable. A rule must name what it allows: bare Bash,
                       Write, Edit, MultiEdit or NotebookEdit, or a wildcard-only
@@ -34,6 +44,10 @@ Options
   --resume <id>       continue the session printed at the end of an earlier run,
                       with the same --cwd
   --verbose           show tool results, not just tool calls
+  --strict            exit 3 when the ledger records failed, blocked, refused,
+                      background or unfinished calls; a failure that a later
+                      run of the same command passed does not count (a
+                      warning is always printed)
   --max-turns <n>     cap the manager's agentic turns (default 60; each
                       specialist has its own cap)
   --max-budget <usd>  stop the run once its estimated cost, specialists
@@ -54,14 +68,13 @@ The team reads and writes real files in --cwd. Point it at a project directory,
 not at this one, unless you mean for it to edit itself.`;
 }
 
-export function parseArgs(
-  argv: string[],
-): Cli | { help: true } | { roles: true; cwd: string } {
+export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   const allow: string[] = [];
   let cwd = process.cwd();
   let autoApprove = false;
   let verbose = false;
+  let strict = false;
   let maxTurns: number | undefined;
   let maxBudgetUsd: number | undefined;
   let model: string | undefined;
@@ -74,7 +87,7 @@ export function parseArgs(
     switch (arg) {
       case "-h":
       case "--help":
-        return { help: true };
+        return { kind: "help" };
       case "--roles":
         roles = true;
         break;
@@ -84,6 +97,9 @@ export function parseArgs(
         break;
       case "--verbose":
         verbose = true;
+        break;
+      case "--strict":
+        strict = true;
         break;
       case "--cwd":
         cwd = expect(argv, ++i, "--cwd");
@@ -126,7 +142,7 @@ export function parseArgs(
     }
   }
 
-  if (roles) return { roles: true, cwd };
+  if (roles) return { kind: "roles", cwd };
 
   if (file !== undefined && positional.length > 0) {
     throw new Error("Give either --file or a task as text, not both.");
@@ -141,14 +157,16 @@ export function parseArgs(
     if (resume !== undefined) {
       throw new Error("--resume needs a message to send to the session.");
     }
-    return { help: true };
+    return { kind: "help" };
   }
 
   return {
+    kind: "run",
     task,
     cwd,
     autoApprove,
     verbose,
+    strict,
     allow,
     resume,
     maxTurns,
@@ -165,13 +183,24 @@ function expect(argv: string[], index: number, flag: string): string {
   return value;
 }
 
+const STAT_ERRORS: Record<string, string> = {
+  ENOENT: "it does not exist",
+  ENOTDIR: "part of the path is a file",
+  EACCES: "permission denied",
+  EPERM: "operation not permitted",
+  ELOOP: "too many symbolic links, or a symlink loop",
+  ENAMETOOLONG: "the path is too long",
+};
+
 /** A mistyped --cwd would otherwise look like a project with nothing in it. */
 export function checkProjectDir(cwd: string): void {
-  let isDirectory = false;
+  let isDirectory: boolean;
   try {
     isDirectory = statSync(cwd).isDirectory();
-  } catch {
-    // Reported below with the path the user gave.
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "unknown error";
+    const why = STAT_ERRORS[code] ?? (error as Error).message;
+    throw new Error(`--cwd ${cwd} is not a directory (${code}: ${why}).`);
   }
   if (!isDirectory) throw new Error(`--cwd ${cwd} is not a directory.`);
 }
