@@ -109,6 +109,13 @@ export interface RunSummary extends Summary {
   /** What each role actually ran, recorded by the harness. */
   ledger: readonly Readonly<LedgerEntry>[];
   ledgerText: string;
+  /**
+   * Hook events or stream messages the ledger failed to record. Non-zero
+   * means the ledger is incomplete; runOutcome treats it as needing a check.
+   */
+  ledgerFaults: number;
+  /** The configuration warnings the run started with (also sent to onWarning). */
+  warnings: readonly string[];
 }
 
 /**
@@ -216,7 +223,8 @@ export async function runTeam(options: RunOptions): Promise<RunSummary> {
       // cannot lose it, and neither of them may end a run that is working.
       summary = foldMessage(summary, message);
       sideEffect("renderer", () => options.onMessage?.(message));
-      sideEffect("ledger", () => ledger.observe(message));
+      // The ledger counts its own faults (ledger.faults()).
+      ledger.observe(message);
     }
   } catch (error) {
     // The ledger is the evidence of what already ran; a failed stream must not lose it.
@@ -227,6 +235,8 @@ export async function runTeam(options: RunOptions): Promise<RunSummary> {
     ...finishSummary(summary),
     ledger: ledger.entries(),
     ledgerText: ledger.format(),
+    ledgerFaults: ledger.faults(),
+    warnings: Object.freeze([...warnings]),
   };
 }
 
@@ -235,7 +245,7 @@ function sideEffect(name: string, run: () => void): void {
     run();
   } catch (error) {
     console.error(
-      `The ${name} failed on a message and skipped it: ${(error as Error).message}`,
+      `The ${name} failed on a message and skipped it: ${(error as Error)?.message ?? String(error)}`,
     );
   }
 }

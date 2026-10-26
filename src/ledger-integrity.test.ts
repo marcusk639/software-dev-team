@@ -280,3 +280,124 @@ describe("ledger: entries are read-only snapshots", () => {
     assert.equal(ledger.entries()[0]?.outcome, "ok");
   });
 });
+
+/** A Bash call from a given agent, started and settled through the real hooks. */
+async function call(
+  ledger: Ledger,
+  id: string,
+  command: string,
+  agentId: string,
+  end: "ok" | "failed" | "pending" | "interrupted",
+  tool = "Bash",
+) {
+  const who = { agent_type: "qa-tester", agent_id: agentId };
+  const input = tool === "Bash" ? { command } : { file_path: command };
+  await fire(ledger, { ...base(id, tool, input), ...who, hook_event_name: "PreToolUse" });
+  if (end !== "pending") await settleCall(ledger, id, command, agentId, end, tool);
+}
+
+async function settleCall(
+  ledger: Ledger,
+  id: string,
+  command: string,
+  agentId: string,
+  end: "ok" | "failed" | "interrupted",
+  tool = "Bash",
+) {
+  const who = { agent_type: "qa-tester", agent_id: agentId };
+  const input = tool === "Bash" ? { command } : { file_path: command };
+  await fire(
+    ledger,
+    end === "failed"
+      ? { ...base(id, tool, input), ...who, hook_event_name: "PostToolUseFailure", error: "Exit code 1" }
+      : {
+          ...base(id, tool, input),
+          ...who,
+          hook_event_name: "PostToolUse",
+          tool_response: { stdout: "", stderr: "", interrupted: end === "interrupted" },
+        },
+  );
+}
+
+describe("I6: a failure is superseded only by a later passing run of the same Bash command", () => {
+  it("does not let another agent's pass supersede a failure", async () => {
+    const ledger = createLedger({ cwd: CWD, secretValues: [] });
+    await call(ledger, "1", "pnpm test", "a1", "failed");
+    await call(ledger, "2", "pnpm test", "b2", "ok");
+    const c = ledgerConcerns(ledger.entries());
+    assert.equal(c.laterPassed, 0);
+    assert.equal(c.counts.failed, 1);
+  });
+
+  it("keeps a failure when the same command only started again", async () => {
+    const ledger = createLedger({ cwd: CWD, secretValues: [] });
+    await call(ledger, "1", "pnpm test", "a1", "failed");
+    await call(ledger, "2", "pnpm test", "a1", "pending");
+    const c = ledgerConcerns(ledger.entries());
+    assert.equal(c.laterPassed, 0);
+    assert.equal(c.counts.failed, 1);
+  });
+
+  it("supersedes only the command that later passed when failures interleave", async () => {
+    const ledger = createLedger({ cwd: CWD, secretValues: [] });
+    await call(ledger, "1", "pnpm test", "a1", "failed");
+    await call(ledger, "2", "pnpm lint", "a1", "failed");
+    await call(ledger, "3", "pnpm test", "a1", "ok");
+    const c = ledgerConcerns(ledger.entries());
+    assert.equal(c.laterPassed, 1);
+    assert.equal(c.counts.failed, 1);
+  });
+
+  it("orders by when calls settled, not when they started", async () => {
+    // The failure started first but finished after the pass.
+    const ledger = createLedger({ cwd: CWD, secretValues: [] });
+    await call(ledger, "1", "pnpm test", "a1", "pending");
+    await call(ledger, "2", "pnpm test", "a1", "pending");
+    await settleCall(ledger, "2", "pnpm test", "a1", "ok");
+    await settleCall(ledger, "1", "pnpm test", "a1", "failed");
+    const c = ledgerConcerns(ledger.entries());
+    assert.equal(c.laterPassed, 0);
+    assert.equal(c.counts.failed, 1);
+  });
+
+  it("does not let another tool with the same detail supersede a failure", async () => {
+    const ledger = createLedger({ cwd: CWD, secretValues: [] });
+    await call(ledger, "1", "src/a.ts", "a1", "failed", "Edit");
+    await call(ledger, "2", "src/a.ts", "a1", "ok", "Edit");
+    await call(ledger, "3", "x", "a1", "failed");
+    await call(ledger, "4", "x", "a1", "ok", "Write");
+    const c = ledgerConcerns(ledger.entries());
+    assert.equal(c.laterPassed, 0);
+    assert.equal(c.counts.failed, 2);
+  });
+});
+
+describe("I7: evidence gaps are recorded, not hidden", () => {
+  it("records an interrupted Bash call as failed, and it cannot supersede", async () => {
+    const ledger = createLedger({ cwd: CWD, secretValues: [] });
+    await call(ledger, "1", "pnpm test", "a1", "failed");
+    await call(ledger, "2", "pnpm test", "a1", "interrupted");
+    const [, interrupted] = ledger.entries();
+    assert.equal(interrupted?.outcome, "failed");
+    assert.match(interrupted?.note ?? "", /interrupted/);
+    const c = ledgerConcerns(ledger.entries());
+    assert.equal(c.laterPassed, 0);
+    assert.equal(c.counts.failed, 2);
+  });
+
+  it("counts a hook or stream fault instead of only logging it", async () => {
+    const ledger = createLedger({ cwd: CWD, secretValues: [] });
+    assert.equal(ledger.faults(), 0);
+    // A hook input the ledger cannot read: no tool_use_id.
+    await fire(ledger, { hook_event_name: "PostToolUse" } as unknown as HookInput);
+    ledger.observe(null as unknown as SDKMessage);
+    assert.equal(ledger.faults(), 2);
+  });
+
+  it("puts duration only on settled ok and failed entries", async () => {
+    const ledger = createLedger({ cwd: CWD, secretValues: [] });
+    await call(ledger, "1", "pnpm test", "a1", "pending");
+    const [started] = ledger.entries();
+    assert.equal("durationMs" in (started ?? {}), false);
+  });
+});

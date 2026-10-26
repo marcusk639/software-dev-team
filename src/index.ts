@@ -106,6 +106,12 @@ async function main(): Promise<number> {
   if (summary.ledgerText) {
     console.log(`\n${DIM}What actually ran in this run:\n${summary.ledgerText}${RESET}`);
   }
+  // Repeated here, next to the ledger, so they are not lost in the scrollback.
+  if (summary.warnings.length > 0) {
+    console.error(
+      `\nConfiguration warnings for this run:\n${summary.warnings.map((w) => `- ${w}`).join("\n")}`,
+    );
+  }
 
   const outcome = runOutcome(summary, cli.strict);
   if (outcome.warning) console.error(`\n${outcome.warning}`);

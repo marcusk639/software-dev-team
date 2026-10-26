@@ -5,7 +5,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { relative } from "node:path";
 import { actorOf } from "./permissions.js";
-import { DELEGATION_TOOLS, isOneOf, type ToolName } from "./tools.js";
+import { DELEGATION_TOOLS, isOneOf, isRecord, type ToolName } from "./tools.js";
 
 interface EntryBase {
   readonly toolUseId: string;
@@ -14,7 +14,6 @@ interface EntryBase {
   readonly agentId?: string | undefined;
   readonly tool: string;
   readonly detail: string;
-  readonly durationMs?: number | undefined;
   /**
    * Set when the call was settled without a PreToolUse record, so its role
    * and detail may be incomplete and the safety hook may not have seen it.
@@ -22,29 +21,53 @@ interface EntryBase {
   readonly noPreToolUseRecord?: true | undefined;
 }
 
+/** Fields of a call that ended. */
+interface Settled {
+  /**
+   * When the call settled, relative to the run's other calls (a counter, not
+   * a clock). Calls finish out of order, so this, not the list order (which
+   * is when they started), says which of two runs came last.
+   */
+  readonly settled?: number | undefined;
+}
+
 /**
  * One call and how it ended. `note` is a reason written by the harness or the
  * first line of an error message, never tool output.
  */
 export type LedgerEntry =
-  | (EntryBase & { readonly outcome: "ok"; readonly note?: undefined })
+  | (EntryBase &
+      Settled & {
+        readonly outcome: "ok";
+        readonly durationMs?: number | undefined;
+        readonly note?: undefined;
+      })
+  | (EntryBase &
+      Settled & {
+        readonly outcome: "failed";
+        readonly durationMs?: number | undefined;
+        readonly note: string;
+      })
   /** Returned at once while the work went on in the background; its result is not known. */
-  | (EntryBase & { readonly outcome: "started"; readonly note: string })
-  | (EntryBase & { readonly outcome: "failed"; readonly note: string })
-  | (EntryBase & {
-      readonly outcome: "blocked" | "refused";
-      readonly note?: string | undefined;
-    })
+  | (EntryBase & Settled & { readonly outcome: "started"; readonly note: string })
+  | (EntryBase &
+      Settled & {
+        readonly outcome: "blocked" | "refused";
+        readonly note?: string | undefined;
+      })
   /** Never settled: refused after the hooks ran, still running, or not run. */
   | (EntryBase & { readonly outcome: "unfinished"; readonly note?: undefined });
 
 export type Outcome = LedgerEntry["outcome"];
 
-/** The ledger's working copy; callers only ever see frozen LedgerEntry snapshots. */
-type Draft = { -readonly [K in keyof EntryBase]: EntryBase[K] } & {
+/** The ledger's working state for one call; callers only ever see frozen LedgerEntry snapshots. */
+interface Call {
+  base: { -readonly [K in keyof EntryBase]: EntryBase[K] };
   outcome: Outcome;
   note?: string | undefined;
-};
+  durationMs?: number | undefined;
+  settled?: number | undefined;
+}
 
 /**
  * One line, without control characters: the ledger is printed to the
@@ -97,7 +120,8 @@ function ranInBackground(
   const res = (response ?? {}) as Record<string, unknown>;
   if (tool === "Bash") {
     // The safety hook forces run_in_background off, but a command that hits
-    // its timeout, or one the user backgrounds, still returns a task id.
+    // its timeout, or one the user backgrounds, still returns a task id
+    // (assumed from the tool's output shape; unverified against 0.3.283).
     return (
       typeof res.backgroundTaskId === "string" ||
       (input as { run_in_background?: unknown } | null)?.run_in_background ===
@@ -106,6 +130,17 @@ function ranInBackground(
   }
   return isOneOf(DELEGATION_TOOLS, tool) && res.status === "async_launched";
 }
+
+/** True when a foreground Bash call was cut off before its command finished. */
+function wasInterrupted(tool: string, response: unknown): boolean {
+  return (
+    tool === "Bash" &&
+    (response as { interrupted?: unknown } | null | undefined)?.interrupted ===
+      true
+  );
+}
+
+const INTERRUPTED_NOTE = "interrupted before the command finished";
 
 /**
  * A record, written by the harness rather than the model, of what each role
@@ -118,7 +153,9 @@ export function createLedger(options: {
   cwd: string;
   secretValues: readonly string[];
 }) {
-  const byId = new Map<string, Draft>();
+  const byId = new Map<string, Call>();
+  let settledCount = 0;
+  let faultCount = 0;
   // Hooks for one event may run concurrently, so a block can arrive before the call is recorded.
   const earlyBlocks = new Map<string, string>();
 
@@ -142,27 +179,23 @@ export function createLedger(options: {
     return path.startsWith("/") ? relative(options.cwd, path) || "." : path;
   }
 
-  function draftFor(
+  function callFor(
     input: Partial<Pick<HookInput, "agent_id" | "agent_type">> & {
       tool_use_id: string;
       tool_name: string;
       tool_input?: unknown;
     },
-  ): Draft {
+  ): Call {
     const actor = actorOf(input);
+    const toolInput = isRecord(input.tool_input) ? input.tool_input : {};
     return {
-      toolUseId: input.tool_use_id,
-      role: actor.kind === "manager" ? "manager" : actor.type,
-      agentId: actor.kind === "manager" ? undefined : actor.id,
-      tool: input.tool_name,
-      detail: printable(
-        redact(
-          describe(
-            input.tool_name,
-            (input.tool_input ?? {}) as Record<string, unknown>,
-          ),
-        ),
-      ),
+      base: {
+        toolUseId: input.tool_use_id,
+        role: actor.kind === "manager" ? "manager" : actor.type,
+        agentId: actor.kind === "manager" ? undefined : actor.id,
+        tool: input.tool_name,
+        detail: printable(redact(describe(input.tool_name, toolInput))),
+      },
       outcome: "unfinished",
     };
   }
@@ -175,35 +208,43 @@ export function createLedger(options: {
     id: string,
     outcome: Exclude<Outcome, "unfinished">,
     note: string | undefined,
-    unseen: () => Draft,
-  ): Draft | undefined {
-    let entry = byId.get(id);
-    if (!entry) {
-      entry = { ...unseen(), noPreToolUseRecord: true };
-      byId.set(id, entry);
+    unseen: () => Call,
+  ): Call | undefined {
+    let call = byId.get(id);
+    if (!call) {
+      call = unseen();
+      call.base.noPreToolUseRecord = true;
+      byId.set(id, call);
     }
-    if (entry.outcome !== "unfinished") return undefined;
-    entry.outcome = outcome;
-    if (note) entry.note = printable(redact(note));
-    return entry;
+    if (call.outcome !== "unfinished") return undefined;
+    call.outcome = outcome;
+    call.settled = (settledCount += 1);
+    if (note) call.note = printable(redact(note));
+    return call;
   }
 
-  const unseenCall = (tool: string, id: string) => (): Draft => ({
-    toolUseId: id,
-    role: "unknown",
-    tool,
-    detail: "",
+  const unseenCall = (tool: string, id: string) => (): Call => ({
+    base: { toolUseId: id, role: "unknown", tool, detail: "" },
     outcome: "unfinished",
   });
 
-  const handler = async (input: HookInput) => {
+  const record = (input: HookInput) => {
+    const { tool_use_id, tool_name } = input as {
+      tool_use_id?: unknown;
+      tool_name?: unknown;
+    };
+    if (typeof tool_use_id !== "string" || typeof tool_name !== "string") {
+      throw new Error(
+        `a ${String(input.hook_event_name)} hook input without a tool use id or tool name`,
+      );
+    }
     switch (input.hook_event_name) {
       case "PreToolUse": {
-        byId.set(input.tool_use_id, draftFor(input));
+        byId.set(input.tool_use_id, callFor(input));
         const early = earlyBlocks.get(input.tool_use_id);
         if (early !== undefined) {
           earlyBlocks.delete(input.tool_use_id);
-          settle(input.tool_use_id, "blocked", early, () => draftFor(input));
+          settle(input.tool_use_id, "blocked", early, () => callFor(input));
         }
         break;
       }
@@ -213,13 +254,16 @@ export function createLedger(options: {
           input.tool_input,
           input.tool_response,
         );
+        // An interrupted command ended without its result: not a pass.
+        const interrupted =
+          !background && wasInterrupted(input.tool_name, input.tool_response);
         const entry = settle(
           input.tool_use_id,
-          background ? "started" : "ok",
-          background ? BACKGROUND_NOTE : undefined,
-          () => draftFor(input),
+          background ? "started" : interrupted ? "failed" : "ok",
+          background ? BACKGROUND_NOTE : interrupted ? INTERRUPTED_NOTE : undefined,
+          () => callFor(input),
         );
-        if (entry) entry.durationMs = input.duration_ms;
+        if (entry && !background) entry.durationMs = input.duration_ms;
         if (isOneOf(DELEGATION_TOOLS, input.tool_name)) {
           const agentId = (
             input.tool_response as { agentId?: unknown } | null | undefined
@@ -241,30 +285,81 @@ export function createLedger(options: {
           (input as { error?: unknown }).error ?? "unknown error",
         );
         settle(input.tool_use_id, "failed", error.split("\n")[0], () =>
-          draftFor(input),
+          callFor(input),
         );
         break;
       }
     }
-    return { continue: true };
+    return undefined;
   };
 
-  function snapshot(entry: Draft): LedgerEntry {
-    return Object.freeze({ ...entry }) as LedgerEntry;
+  /**
+   * A ledger fault must never end a run that is working, but it must not be
+   * silent either: it is counted, and the run reports its record incomplete.
+   */
+  function guarded<A extends unknown[], R>(
+    name: string,
+    run: (...args: A) => R,
+  ): (...args: A) => R | undefined {
+    return (...args) => {
+      try {
+        return run(...args);
+      } catch (error) {
+        faultCount += 1;
+        console.error(
+          `The ledger failed on a ${name} and skipped it: ${(error as Error)?.message ?? String(error)}`,
+        );
+        return undefined;
+      }
+    };
   }
 
-  function recorded(): Draft[] {
-    return [...byId.values()].filter(
-      (e) =>
-        !NOT_RECORDED.has(e.tool) ||
-        e.outcome === "blocked" ||
-        e.outcome === "refused",
-    );
+  const handler = async (input: HookInput) =>
+    guarded("hook event", record)(input) ?? { continue: true };
+
+  function snapshot(call: Call): LedgerEntry {
+    const { base, note, durationMs, settled } = call;
+    const timed = durationMs === undefined ? {} : { durationMs };
+    switch (call.outcome) {
+      case "unfinished":
+        return Object.freeze({ ...base, outcome: "unfinished" });
+      case "ok":
+        return Object.freeze({ ...base, ...timed, settled, outcome: "ok" });
+      case "failed":
+        return Object.freeze({
+          ...base,
+          ...timed,
+          settled,
+          outcome: "failed",
+          note: note ?? "failed",
+        });
+      case "started":
+        return Object.freeze({
+          ...base,
+          settled,
+          outcome: "started",
+          note: note ?? BACKGROUND_NOTE,
+        });
+      case "blocked":
+      case "refused":
+        return Object.freeze({ ...base, settled, outcome: call.outcome, note });
+    }
   }
 
-  /** Frozen snapshots, in the order the calls started. */
+  function recorded(): LedgerEntry[] {
+    return [...byId.values()]
+      .map(snapshot)
+      .filter(
+        (e) =>
+          !NOT_RECORDED.has(e.tool) ||
+          e.outcome === "blocked" ||
+          e.outcome === "refused",
+      );
+  }
+
+  /** Frozen snapshots, in the order the calls started (see `settled` for when they ended). */
   function entries(): LedgerEntry[] {
-    return recorded().map(snapshot);
+    return recorded();
   }
 
   /**
@@ -324,14 +419,14 @@ export function createLedger(options: {
     hooks,
 
     /** Called by the safety hook when it denies a call. */
-    block(toolUseId: string, reason: string): void {
-      if (byId.has(toolUseId))
-        settle(toolUseId, "blocked", reason, unseenCall("", toolUseId));
-      else earlyBlocks.set(toolUseId, reason);
-    },
+    block: guarded("block", (toolUseId: string, reason: string): void => {
+      const call = byId.get(toolUseId);
+      if (call === undefined) earlyBlocks.set(toolUseId, reason);
+      else settle(toolUseId, "blocked", reason, () => call);
+    }),
 
     /** Feed every stream message through; picks up refusals the hooks never see. */
-    observe(message: SDKMessage): void {
+    observe: guarded("stream message", (message: SDKMessage): void => {
       if (
         message.type === "system" &&
         message.subtype === "permission_denied"
@@ -352,17 +447,18 @@ export function createLedger(options: {
           );
         }
       }
-    },
+    }),
+
+    /** How many hook events or stream messages the ledger failed to record. */
+    faults: (): number => faultCount,
 
     entries,
 
     format(): string {
       const rows = recorded().map((e) => {
         const who = e.agentId ? `${e.role}#${e.agentId.slice(0, 6)}` : e.role;
-        const time =
-          e.durationMs === undefined
-            ? ""
-            : ` ${(e.durationMs / 1000).toFixed(1)}s`;
+        const ms = "durationMs" in e ? e.durationMs : undefined;
+        const time = ms === undefined ? "" : ` ${(ms / 1000).toFixed(1)}s`;
         const result =
           e.outcome === "ok"
             ? `ok${time}`
@@ -396,7 +492,7 @@ export interface LedgerConcerns {
   readonly counts: Readonly<
     Record<"failed" | "blocked" | "refused" | "started" | "unfinished", number>
   >;
-  /** Failures that a later ok run of the same command by the same agent superseded. */
+  /** Bash failures that a later ok run of the same command by the same agent superseded. */
   readonly laterPassed: number;
   /** True when an entry needs the operator's attention (what --strict fails on). */
   readonly needsCheck: boolean;
@@ -404,11 +500,17 @@ export interface LedgerConcerns {
   readonly warning: string | undefined;
 }
 
+/** When an entry settled: the ledger's counter, or its place in a hand-built list. */
+const settledAt = (e: LedgerEntry, index: number): number =>
+  e.outcome === "unfinished" ? Infinity : (e.settled ?? index);
+
 /**
  * Entries whose outcome means the run's report may claim more than the
- * harness saw. A failed command followed by an ok run of the same command
- * from the same agent is the red-then-green of TDD: it is reported as
- * "later passed" and does not count as needing a check.
+ * harness saw. A failed Bash command followed, in settle order, by an ok run
+ * of the same command from the same agent is the red-then-green of TDD: it
+ * is reported as "later passed" and does not count as needing a check.
+ * Other tools' details (a path, `→ role`) do not identify a retry, so their
+ * failures always count.
  */
 export function ledgerConcerns(
   entries: readonly LedgerEntry[],
@@ -425,15 +527,16 @@ export function ledgerConcerns(
     if (e.outcome === "ok") return;
     if (
       e.outcome === "failed" &&
-      entries
-        .slice(i + 1)
-        .some(
-          (later) =>
-            later.outcome === "ok" &&
-            later.agentId === e.agentId &&
-            later.tool === e.tool &&
-            later.detail === e.detail,
-        )
+      e.tool === "Bash" &&
+      e.agentId !== undefined &&
+      entries.some(
+        (later, j) =>
+          later.outcome === "ok" &&
+          later.tool === "Bash" &&
+          later.agentId === e.agentId &&
+          later.detail === e.detail &&
+          settledAt(later, j) > settledAt(e, i),
+      )
     ) {
       laterPassed += 1;
       return;
