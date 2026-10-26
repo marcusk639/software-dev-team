@@ -213,8 +213,9 @@ export function denyReason(
   }
 
   if (toolName === "Grep" || toolName === "Glob") {
-    // Glob only lists names, so its pattern is not screened; Grep prints
-    // contents and always runs ripgrep with --hidden.
+    // Glob only lists names, so its pattern is not screened for secrets
+    // (approvalReason confines where it looks); Grep prints contents and is
+    // assumed to run ripgrep with --hidden (unverified against 0.3.283).
     if (
       isSecretPath(policy.cwd, asString(input.path)) ||
       (toolName === "Grep" && isSecretGlob(asString(input.glob)))

@@ -267,3 +267,19 @@ describe("orchestrator prompt wording (round 2)", () => {
     assert.match(prompt, /whose last recorded run failed/);
   });
 });
+
+describe("prompts explain approvable out-of-project reads (I8)", () => {
+  const READS =
+    /Reads outside the project need the operator's approval; in an unattended run they are blocked, and the operator can allow a directory with `--allow "Read\(\/\/abs\/dir\/\*\*\)"`\./;
+
+  it("tells the manager, with what the record lists and what its summary rows mean", () => {
+    const prompt = loadOrchestratorPrompt();
+    assert.match(prompt, READS);
+    assert.match(prompt, /WebFetch calls are recorded/);
+    assert.match(prompt, /"N more earlier calls that ended ok" row/);
+  });
+
+  it("tells specialists", () => {
+    assert.match(loadTeam()["qa-tester"].prompt, READS);
+  });
+});

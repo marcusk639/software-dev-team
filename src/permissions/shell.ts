@@ -435,7 +435,8 @@ function isReadOnly(command: string): boolean {
 const SECRET_COMMANDS = [
   /\bgh\s+auth\s+(?:token\b|status\b[^|;&\n]*\s(?:-t|--show-token)\b)/,
   /\bgit\s+credential(?:-[\w-]+)?\s+(?:fill|get)\b/,
-  // ripgrep skips hidden and ignored files unless told otherwise; .env is both.
+  // ripgrep skips hidden and ignored files unless told otherwise; .env is
+  // hidden, and ignored when .gitignore lists it (it usually does).
   // Allowed when the command excludes .env* itself.
   /\brg\b(?=[^|;&\n]*\s(-[a-zA-Z]*u[a-zA-Z]*|--no-ignore\S*|--hidden|-\.)(?=\s|$))(?![^|;&\n]*(-g|--glob)[\s=]*["']?!\.env)/,
 ];
@@ -505,8 +506,9 @@ const NOT_A_PATH = new Set(["ENOENT", "ENOTDIR", "ENAMETOOLONG", "EINVAL"]);
 /**
  * A recursive grep ignores .gitignore, so one rooted at the project (or with
  * no path, which means the current directory), a parent, or an absolute path
- * reaches .env. One confined to subdirectories such as src does not, and
- * neither does one that excludes .env* itself.
+ * reaches .env. One confined to a subdirectory such as src is allowed, though
+ * it still reads any secret file inside that subdirectory; so is one that
+ * excludes .env* itself.
  */
 function recursiveGrepReachesSecrets(command: string): boolean {
   return command
