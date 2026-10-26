@@ -396,14 +396,19 @@ export interface LedgerConcerns {
   readonly counts: Readonly<
     Record<"failed" | "blocked" | "refused" | "started" | "unfinished", number>
   >;
+  /** Failures that a later ok run of the same command by the same agent superseded. */
+  readonly laterPassed: number;
+  /** True when an entry needs the operator's attention (what --strict fails on). */
+  readonly needsCheck: boolean;
   /** One line for the operator, or undefined when every recorded call ended ok. */
   readonly warning: string | undefined;
 }
 
 /**
  * Entries whose outcome means the run's report may claim more than the
- * harness saw. A failed command can be a normal step (a test run before the
- * fix); the warning says to look, not that the run is wrong.
+ * harness saw. A failed command followed by an ok run of the same command
+ * from the same agent is the red-then-green of TDD: it is reported as
+ * "later passed" and does not count as needing a check.
  */
 export function ledgerConcerns(
   entries: readonly LedgerEntry[],
@@ -415,19 +420,42 @@ export function ledgerConcerns(
     started: 0,
     unfinished: 0,
   };
-  for (const e of entries) if (e.outcome !== "ok") counts[e.outcome] += 1;
+  let laterPassed = 0;
+  entries.forEach((e, i) => {
+    if (e.outcome === "ok") return;
+    if (
+      e.outcome === "failed" &&
+      entries
+        .slice(i + 1)
+        .some(
+          (later) =>
+            later.outcome === "ok" &&
+            later.agentId === e.agentId &&
+            later.tool === e.tool &&
+            later.detail === e.detail,
+        )
+    ) {
+      laterPassed += 1;
+      return;
+    }
+    counts[e.outcome] += 1;
+  });
   const parts = [
     counts.failed && `${counts.failed} failed`,
+    laterPassed && `${laterPassed} failed (later passed)`,
     counts.blocked && `${counts.blocked} blocked`,
     counts.refused && `${counts.refused} refused`,
     counts.started && `${counts.started} left running in the background`,
     counts.unfinished && `${counts.unfinished} with no result`,
   ].filter(Boolean);
+  const needsCheck = Object.values(counts).some((n) => n > 0);
   return {
     counts,
+    laterPassed,
+    needsCheck,
     warning:
       parts.length === 0
         ? undefined
-        : `Warning: the ledger records ${parts.join(", ")}. Check those calls before trusting the report.`,
+        : `Warning: the ledger records ${parts.join(", ")}.${needsCheck ? " Check those calls before trusting the report." : ""}`,
   };
 }

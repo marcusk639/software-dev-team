@@ -45,7 +45,9 @@ Options
                       with the same --cwd
   --verbose           show tool results, not just tool calls
   --strict            exit 3 when the ledger records failed, blocked, refused,
-                      background or unfinished calls (a warning is always printed)
+                      background or unfinished calls; a failure that a later
+                      run of the same command passed does not count (a
+                      warning is always printed)
   --max-turns <n>     cap the manager's agentic turns (default 60; each
                       specialist has its own cap)
   --max-budget <usd>  stop the run once its estimated cost, specialists

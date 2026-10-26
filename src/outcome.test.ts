@@ -41,3 +41,54 @@ describe("runOutcome (C3, I9e)", () => {
     assert.equal(runOutcome({ isError: true, ledger: [entry("failed")] }, true).code, 1);
   });
 });
+
+describe("red then green: a failure a later run of the same command fixed", () => {
+  const run = (
+    id: string,
+    outcome: "ok" | "failed",
+    detail = "pnpm test",
+    agentId = "a1",
+  ): LedgerEntry =>
+    ({
+      toolUseId: id,
+      role: "qa-tester",
+      agentId,
+      tool: "Bash",
+      detail,
+      outcome,
+      ...(outcome === "failed" ? { note: "Exit code 1" } : {}),
+    }) as LedgerEntry;
+
+  it("does not trip --strict, and is shown as later passed", () => {
+    const outcome = runOutcome(
+      { isError: false, ledger: [run("1", "failed"), run("2", "ok")] },
+      true,
+    );
+    assert.equal(outcome.code, 0);
+    assert.match(outcome.warning ?? "", /1 failed \(later passed\)/);
+    assert.doesNotMatch(outcome.warning ?? "", /Check those calls/);
+  });
+
+  it("still trips --strict when the last run of that command failed", () => {
+    const outcome = runOutcome(
+      {
+        isError: false,
+        ledger: [run("1", "failed"), run("2", "ok"), run("3", "failed")],
+      },
+      true,
+    );
+    assert.equal(outcome.code, 3);
+    assert.match(outcome.warning ?? "", /1 failed, 1 failed \(later passed\)/);
+  });
+
+  it("does not count an ok of a different command or another agent", () => {
+    for (const later of [run("2", "ok", "pnpm lint"), run("2", "ok", "pnpm test", "b2")]) {
+      const outcome = runOutcome(
+        { isError: false, ledger: [run("1", "failed"), later] },
+        true,
+      );
+      assert.equal(outcome.code, 3);
+      assert.match(outcome.warning ?? "", /^Warning: the ledger records 1 failed\./);
+    }
+  });
+});

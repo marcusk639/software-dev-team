@@ -259,3 +259,11 @@ describe("prompts describe what the harness enforces (I10)", () => {
     assert.match(prompt, /safety layer blocked can't be approved/);
   });
 });
+
+describe("orchestrator prompt wording (round 2)", () => {
+  it("names the file-tool write boundary and judges a command by its last run", () => {
+    const prompt = loadOrchestratorPrompt();
+    assert.match(prompt, /a file-tool write outside the project/);
+    assert.match(prompt, /whose last recorded run failed/);
+  });
+});

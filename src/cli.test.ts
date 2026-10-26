@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkProjectDir, parseArgs } from "./cli.js";
+import { checkProjectDir, parseArgs, usage } from "./cli.js";
 
 describe("parseArgs", () => {
   it("collects repeated --allow rules", () => {
@@ -160,5 +160,13 @@ describe("parseArgs: kind tag", () => {
     assert.equal(parseArgs([]).kind, "help");
     assert.equal(parseArgs(["--roles"]).kind, "roles");
     assert.equal(parseArgs(["do it"]).kind, "run");
+  });
+});
+
+describe("usage: --yes names what acceptEdits approves", () => {
+  it("lists the commands acceptEdits runs without asking (SDK 0.3.283)", () => {
+    const text = usage().replace(/\s+/g, " ");
+    assert.match(text, /mkdir, touch, rm, rmdir, mv, cp, sed/);
+    assert.match(text, /rm, rmdir and sed included/);
   });
 });
