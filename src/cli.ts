@@ -174,13 +174,24 @@ function expect(argv: string[], index: number, flag: string): string {
   return value;
 }
 
+const STAT_ERRORS: Record<string, string> = {
+  ENOENT: "it does not exist",
+  ENOTDIR: "part of the path is a file",
+  EACCES: "permission denied",
+  EPERM: "operation not permitted",
+  ELOOP: "too many symbolic links, or a symlink loop",
+  ENAMETOOLONG: "the path is too long",
+};
+
 /** A mistyped --cwd would otherwise look like a project with nothing in it. */
 export function checkProjectDir(cwd: string): void {
-  let isDirectory = false;
+  let isDirectory: boolean;
   try {
     isDirectory = statSync(cwd).isDirectory();
-  } catch {
-    // Reported below with the path the user gave.
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "unknown error";
+    const why = STAT_ERRORS[code] ?? (error as Error).message;
+    throw new Error(`--cwd ${cwd} is not a directory (${code}: ${why}).`);
   }
   if (!isDirectory) throw new Error(`--cwd ${cwd} is not a directory.`);
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkProjectDir, parseArgs } from "./cli.js";
@@ -126,5 +126,30 @@ describe("--strict", () => {
     const cli = parseArgs(["task"]);
     assert.ok("task" in cli);
     assert.equal(cli.strict, false);
+  });
+});
+
+describe("checkProjectDir: the real reason a --cwd is unusable", () => {
+  it("names ENOENT for a path that does not exist", () => {
+    assert.throws(() => checkProjectDir(join(tmpdir(), "sdt-no-such-dir-y")), /ENOENT/);
+  });
+
+  it("names ELOOP for a symlink loop", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sdt-cli-"));
+    symlinkSync(join(dir, "b"), join(dir, "a"));
+    symlinkSync(join(dir, "a"), join(dir, "b"));
+    assert.throws(() => checkProjectDir(join(dir, "a")), /ELOOP/);
+  });
+
+  it("names EACCES for a directory it may not enter", { skip: process.getuid?.() === 0 }, () => {
+    const dir = mkdtempSync(join(tmpdir(), "sdt-cli-"));
+    mkdirSync(join(dir, "locked"));
+    mkdirSync(join(dir, "locked", "inner"));
+    chmodSync(join(dir, "locked"), 0o000);
+    try {
+      assert.throws(() => checkProjectDir(join(dir, "locked", "inner")), /EACCES/);
+    } finally {
+      chmodSync(join(dir, "locked"), 0o700);
+    }
   });
 });
