@@ -46,10 +46,13 @@ export const PROMPT_NAMES: readonly string[] = [
   ...ROLES,
 ];
 
+const ROSTER = "{{roster}}";
+
 /**
  * Rendered per run so edits to prompt.md take effect on the next run. The
- * body after a project's replacement and section overrides is rendered and
- * must keep {{roster}}; appended text is used verbatim.
+ * built-in prompt, or a project's replacement of it, is rendered strictly, so
+ * a stray `{{` there is an error. A section override only has {{roster}}
+ * filled and keeps any other braces as literal text, as appended text does.
  */
 export function loadOrchestratorPrompt(
   customizations: ReadonlyMap<string, PromptCustomization> = new Map(),
@@ -58,19 +61,32 @@ export function loadOrchestratorPrompt(
     (role) => `- ${role}: ${AGENTS[role].description}`,
   ).join("\n");
   const custom = customizations.get(ORCHESTRATOR);
-  const template = customizeBody(
-    loadPrompt(new URL("./prompt.md", import.meta.url)),
-    custom,
+  const base =
+    custom?.replace ?? loadPrompt(new URL("./prompt.md", import.meta.url));
+  const placed =
+    base.includes(ROSTER) ||
+    Object.values(custom?.sections ?? {}).some((text) => text.includes(ROSTER));
+  const sections =
+    custom?.sections &&
+    Object.fromEntries(
+      Object.entries(custom.sections).map(([name, text]) => [
+        name,
+        text.split(ROSTER).join(roster),
+      ]),
+    );
+  const body = customizeBody(
+    renderPrompt(base, { roster }),
+    sections && { sections },
     "The orchestrator prompt",
   );
   // Without the roster the manager cannot know which specialists exist; a
   // project replacing <team> or the whole prompt must keep the placeholder.
-  if (!template.includes("{{roster}}")) {
+  if (!placed || !body.includes(roster)) {
     throw new Error(
       "The orchestrator prompt must include {{roster}}, which lists the team. Keep it in any replacement of the prompt or of its <team> section.",
     );
   }
-  return withAppended(renderPrompt(template, { roster }), custom?.append);
+  return withAppended(body, custom?.append);
 }
 
 /** Default turn ceiling for the manager on every run; override with --max-turns. */

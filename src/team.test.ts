@@ -47,6 +47,34 @@ describe("loadOrchestratorPrompt", () => {
     );
     assert.match(prompt, /Use \{\{handlebars\}\} templates\.$/);
   });
+
+  it("keeps literal braces in a replaced section and still fills the roster", () => {
+    const prompt = loadOrchestratorPrompt(
+      new Map([
+        [
+          "orchestrator",
+          {
+            sections: {
+              quality_bar: "Templates use {{ name }} and {{x}}; a lone }} too.",
+              team: "Our team:\n{{roster}}",
+            },
+          },
+        ],
+      ]),
+    );
+    assert.match(prompt, /<quality_bar>\nTemplates use \{\{ name \}\} and \{\{x\}\}; a lone \}\} too\.\n<\/quality_bar>/);
+    assert.match(prompt, /<team>\nOur team:\n- product-manager: /);
+  });
+
+  it("still rejects a section override that drops the roster", () => {
+    assert.throws(
+      () =>
+        loadOrchestratorPrompt(
+          new Map([["orchestrator", { sections: { team: "{{literal}} only" } }]]),
+        ),
+      /\{\{roster\}\}/,
+    );
+  });
 });
 
 describe("team conventions", () => {
