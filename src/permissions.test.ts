@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
+  createPermissionGate,
   createPolicy,
   createSafetyHooks,
   denyReason,
@@ -561,5 +568,189 @@ describe("the manager reads and delegates; it does not act", () => {
 
   it("leaves specialists' tool calls to the normal policy", async () => {
     assert.deepEqual(await call("Bash", { command: "pnpm test" }, "a1b2"), { continue: true });
+  });
+});
+
+describe("PR #2 review: safety holes", () => {
+  const p = (rel: string) => join(project, rel);
+  mkdirSync(join(project, "docs"), { recursive: true });
+  mkdirSync(join(project, ".claude"), { recursive: true });
+  writeFileSync(join(project, ".env"), "SECRET=1");
+  writeFileSync(join(project, "src", "index.ts"), "x");
+  symlinkSync(join(project, ".env"), join(project, "docs", "config"));
+  mkdirSync(join(project, ".aws"), { recursive: true });
+  symlinkSync(join(project, ".aws"), join(project, "awslink"));
+
+  check(
+    [
+      // reads through a symlink to a secret file
+      ["Read", { file_path: p("docs/config") }],
+      ["Grep", { pattern: "SECRET", path: p("docs/config") }],
+      ["Glob", { pattern: "*", path: p("awslink") }],
+      // backtick substitution
+      bash("echo `cat .env`"),
+      bash('git commit -m "`cat .env`"'),
+      bash("x=`cat .env`; echo $x"),
+      // entering a protected directory so a later call can write there
+      bash("cd .claude"),
+      bash("pushd .git/hooks"),
+      bash("cd .claude && ls"),
+      // the same secret files through every tool
+      bash("cat certs/server.key"),
+      bash("cat config/credentials"),
+      ["Glob", { pattern: "**/*.key" }],
+      ["Grep", { pattern: "x", glob: "*.key" }],
+      // searches that read .env without naming it
+      bash("grep -rn API_KEY ."),
+      bash("grep -R SECRET src ."),
+      bash("rg -uu SECRET ."),
+      bash("rg --hidden TOKEN"),
+      bash("cat .e*"),
+      bash("head .en?"),
+      bash("cat .[e]nv"),
+      // ways to discard work
+      bash("git checkout src/index.ts"),
+      bash("git checkout HEAD src/index.ts"),
+      bash("git checkout main -- src/index.ts"),
+      bash("git reset HEAD~1 --hard"),
+      bash("git reset -q --hard"),
+      bash("git rm -rf src"),
+      bash("git rm --force src/index.ts"),
+      bash("git branch --delete --force old"),
+      bash("git branch -d -f old"),
+      bash("git branch -df old"),
+      bash("git worktree remove --force ../wt"),
+      // smaller gaps
+      bash("echo x > id_rsa.pub"),
+      bash("git grep -Ovim foo .claude"),
+      bash("git grep --open-files-in-pager=vim foo .git"),
+    ],
+    "deny",
+  );
+  check(
+    [
+      bash("git checkout main"),
+      bash("git checkout -b feat/x"),
+      bash("git checkout -b feat/x origin/main"),
+      bash("git checkout-index --help"),
+      bash("git -C . rm -r --cached node_modules"),
+      bash("git rm -r --cached dist"),
+      bash("git reset --soft HEAD~1"),
+      bash("git branch -d merged"),
+      bash("git worktree remove ../wt"),
+      bash("grep -rn TODO src --exclude=.env*"),
+      bash("grep -n TODO src/index.ts"),
+      bash("rg TODO src"),
+      bash("rg -g '!.env*' -uu SECRET ."),
+      bash("cd src && ls"),
+      ["Read", { file_path: p("src/index.ts") }],
+      ["Glob", { pattern: "**/*.ts" }],
+    ],
+    "allow",
+  );
+});
+
+describe("the hook fails closed and reports what it blocked", () => {
+  const loop = join(project, "loopa");
+  symlinkSync(join(project, "loopb"), loop);
+  symlinkSync(loop, join(project, "loopb"));
+  const blocked: Array<[string, string]> = [];
+  const hook = createSafetyHooks(policy, (id, reason) => blocked.push([id, reason])).PreToolUse[0]!.hooks[0]!;
+  const call = (tool_name: string, tool_input: Record<string, unknown>) =>
+    hook(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "s",
+        transcript_path: "/t",
+        cwd: project,
+        tool_name,
+        tool_use_id: "t9",
+        tool_input,
+        agent_id: "a1",
+        agent_type: "backend-engineer",
+      },
+      "t9",
+      { signal: new AbortController().signal },
+    );
+  const reasonOf = (output: unknown) =>
+    (output as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } })
+      .hookSpecificOutput;
+
+  it("denies a call the policy cannot evaluate", async () => {
+    assert.throws(() => denyReason(policy, "Write", { file_path: loop }));
+    const output = reasonOf(await call("Write", { file_path: loop, content: "x" }));
+    assert.equal(output?.permissionDecision, "deny");
+    assert.match(output?.permissionDecisionReason ?? "", /could not evaluate/);
+  });
+
+  it("denies a specialist's destructive command and tells the ledger", async () => {
+    blocked.length = 0;
+    const output = reasonOf(await call("Bash", { command: "rm -rf build" }));
+    assert.equal(output?.permissionDecision, "deny");
+    assert.equal(blocked[0]?.[0], "t9");
+    assert.match(blocked[0]?.[1] ?? "", /recursive delete/);
+  });
+
+  it("names the rule that matched", () => {
+    assert.match(denyReason(policy, "Bash", { command: "git -c core.fsmonitor=x status" }) ?? "", /changes what git runs/);
+    assert.match(denyReason(policy, "Bash", { command: "git push -fu origin x" }) ?? "", /force push/);
+  });
+});
+
+describe("secret capture and exemptions", () => {
+  it("captures every credential-named variable long enough to be a secret", () => {
+    const captured = createPolicy({
+      cwd: project,
+      agents: [],
+      pinnedModels: [],
+      env: {
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth-0123456789",
+        GITHUB_TOKEN: "ghp_0123456789ab",
+        AWS_SECRET_ACCESS_KEY: "aws-secret-0123456",
+        DB_PASSWD: "passwd-0123456789",
+        HOME: "/Users/someone-long-path",
+      },
+    }).secretValues;
+    assert.deepEqual([...captured].sort(), ["aws-secret-0123456", "ghp_0123456789ab", "oauth-0123456789", "passwd-0123456789"]);
+  });
+
+  check(
+    [
+      bash("echo .env >> .gitignore && cat .env"),
+      bash("echo $(cat .env) >> .gitignore"),
+      bash("printf .env > .gitignore; cat .env"),
+    ],
+    "deny",
+  );
+});
+
+describe("the approval prompt shows what is being approved", () => {
+  const asked: string[] = [];
+  const gate = createPermissionGate(policy, async (question) => {
+    asked.push(question);
+    return "n";
+  });
+  const options = { signal: new AbortController().signal, toolUseID: "t1" } as unknown as Parameters<typeof gate>[2];
+
+  it("shows a WebFetch URL", async () => {
+    await gate("WebFetch", { url: "https://example.com/data", prompt: "x" }, options);
+    assert.match(asked.at(-1)!, /https:\/\/example\.com\/data/);
+  });
+
+  it("shows an MCP tool's arguments", async () => {
+    await gate("mcp__db__query", { sql: "select * from users" }, options);
+    assert.match(asked.at(-1)!, /select \* from users/);
+  });
+
+  it("strips control characters from what it shows", async () => {
+    await gate("Bash", { command: "echo ok\u001b[2K\rrm nothing" }, options);
+    assert.doesNotMatch(asked.at(-1)!, /\u001b|\r/);
+  });
+
+  it("denies without asking when the policy forbids the call", async () => {
+    const before = asked.length;
+    const result = await gate("Bash", { command: "rm -rf build" }, options);
+    assert.equal(result?.behavior, "deny");
+    assert.equal(asked.length, before);
   });
 });

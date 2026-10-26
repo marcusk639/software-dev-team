@@ -47,15 +47,15 @@ export function createPolicy(options: {
 
 /**
  * Commands that are never allowed, in any permission mode. Matched against the
- * Bash string (with git's global options stripped) so a compound command
- * cannot smuggle one past the check. `[^|;&\n]*` keeps a match inside one
+ * Bash string with git's global options stripped (and, for rules marked raw,
+ * as written too) so a compound command cannot smuggle one past the check. `[^|;&\n]*` keeps a match inside one
  * command of a pipeline or list.
  *
  * This is a second layer, not a sandbox: interpreter one-liners and scripts can
  * do anything these patterns name. Under --yes, the CLI itself refuses most
  * Bash that the run has not allow-listed (see allowlist.ts).
  */
-const HARD_DENY: Array<{ pattern: RegExp; why: string }> = [
+const HARD_DENY: Array<{ pattern: RegExp; why: string; raw?: boolean }> = [
   {
     // rm as its own word, however it is reached (after a wrapper, inside
     // bash -c, path-qualified). A subcommand of git, docker and the like is
@@ -77,10 +77,22 @@ const HARD_DENY: Array<{ pattern: RegExp; why: string }> = [
     pattern: /\bgit\s+push\b[^|;&\n]*\s[+:]\S/,
     why: "force push or remote branch deletion",
   },
-  { pattern: /\bgit\s+reset\s+--hard\b/, why: "discards uncommitted work" },
+  {
+    pattern: /\bgit\s+reset\b[^|;&\n]*\s--hard\b/,
+    why: "discards uncommitted work",
+  },
+  {
+    // `git rm -r --cached` only untracks; forcing deletes files with changes.
+    pattern: /\bgit\s+rm\b[^|;&\n]*\s(-[a-zA-Z]*f[a-zA-Z]*|--force)(?=\s|$)/,
+    why: "deletes files with uncommitted changes",
+  },
+  {
+    pattern: /\bgit\s+worktree\s+remove\b[^|;&\n]*\s(--force|-f)(?=\s|$)/,
+    why: "deletes a worktree with uncommitted changes",
+  },
   {
     pattern:
-      /\bgit\s+checkout\b[^|;&\n]*\s(--|\.|--force|-[a-zA-Z]*[fB][a-zA-Z]*)(?=\s|$)/,
+      /\bgit\s+checkout(?=\s|$)[^|;&\n]*\s(--|\.|--force|-[a-zA-Z]*[fB][a-zA-Z]*)(?=\s|$)/,
     why: "discards uncommitted work",
   },
   {
@@ -104,6 +116,12 @@ const HARD_DENY: Array<{ pattern: RegExp; why: string }> = [
     pattern: /\bgit\s+branch\b[^|;&\n]*\s-[a-zA-Z]*D[a-zA-Z]*(?=\s|$)/,
     why: "force-deletes a branch",
   },
+  {
+    // --delete --force, -d -f and -df are -D spelled out.
+    pattern:
+      /\bgit\s+branch\b(?=[^|;&\n]*\s(--delete|-[a-zA-Z]*d[a-zA-Z]*)(?=\s|$))(?=[^|;&\n]*\s(--force|-[a-zA-Z]*f[a-zA-Z]*)(?=\s|$))/,
+    why: "force-deletes a branch",
+  },
   { pattern: /\bgit\s+stash\s+(drop|clear)\b/, why: "deletes stashed work" },
   {
     // Aliases and these settings make later git commands run something else,
@@ -112,6 +130,7 @@ const HARD_DENY: Array<{ pattern: RegExp; why: string }> = [
     pattern:
       /\bgit\b[^|;&\n]*(\sconfig\b[^|;&\n]*\s|\s-c\s*)(alias\.|core\.(hooksPath|fsmonitor|sshCommand|pager|editor|askPass)\b|credential\.helper\b)/i,
     why: "changes what git runs",
+    raw: true,
   },
   {
     // Only when sent to a database client: writing a migration file that
@@ -180,18 +199,22 @@ const SECRET_PATH = [
 ];
 
 /**
- * The same material as SECRET_PATH, found as tokens inside a shell command or a
- * glob. Any mention is refused, not only writes: reading a secret into the
- * transcript is the leak.
+ * SECRET_PATH's files, found as tokens inside a shell command or a glob. A
+ * mention is refused even when it only reads: reading a secret into the
+ * transcript is the leak. Quoted commit and PR text, exclusion arguments and
+ * .gitignore appends are exempt (below).
  */
 const SECRET_IN_TEXT = [
-  /(^|[\s"'=|;&(<>/*:\\])\.env(?!\.(example|sample|template|dist)\b)(?=$|[\s"'|;&)<>.*/~])/i,
-  /(^|[\s"'=|;&(<>/:\\])\.envrc\b/i,
+  /(^|[\s"'=|;&(<>/*:\\\x60])\.env(?!\.(example|sample|template|dist)\b)(?=$|[\s"'|;&)<>.*/~\x60])/i,
+  /(^|[\s"'=|;&(<>/:\\\x60])\.envrc\b/i,
   /\bid_(rsa|ed25519|ecdsa|dsa)\b(?!\.pub)/i,
   /\.(ssh|aws|kube)\//i,
   /\.docker\/config\.json\b/i,
   /\.(pem|p12|pfx|tfvars)\b/i,
   /\bcredentials\.json\b/i,
+  // As file names only: `obj.key` and the word "credentials" in code are common.
+  /(^|[\s"'=/:\\*\x60])[\w.*?-]*\.key(?=$|[\s"'|;&)<>\x60])/i,
+  /(^|[\s"'=/:\\\x60])credentials(?=$|[\s"'|;&)<>\x60])/i,
   /\.(netrc|pgpass|git-credentials|npmrc)\b/i,
   /\.credentials\.json\b/i,
   /\.pypirc\b/i,
@@ -199,6 +222,54 @@ const SECRET_IN_TEXT = [
   /\.config\/(gh|gcloud)\//i,
   /\.tfstate\b/i,
 ];
+
+/**
+ * Commands that read secret files without naming them: a recursive grep (it
+ * ignores .gitignore), rg told to search hidden or ignored files, and an
+ * unquoted glob that can expand to a dotfile such as .env. Allowed when the
+ * command excludes .env* itself.
+ */
+const SECRET_SCAN = [
+  /\brg\b(?=[^|;&\n]*\s(-[a-zA-Z]*u[a-zA-Z]*|--no-ignore\S*|--hidden)(?=\s|$))(?![^|;&\n]*(-g|--glob)[\s=]*["']?!\.env)/,
+  /(^|[\s"'])\.[\w-]*[*?[]/,
+];
+
+/**
+ * A recursive grep ignores .gitignore, so one rooted at the project (or with
+ * no path, which means the current directory), a parent, or an absolute path
+ * reaches .env. One confined to subdirectories such as src does not, and
+ * neither does one that excludes .env* itself.
+ */
+function recursiveGrepReachesSecrets(command: string): boolean {
+  return command
+    .split(/&&|\|\||[|;&\n]/)
+    .map((segment) => segment.trim().split(/\s+/))
+    .some(([head = "", ...args]) => {
+      if (!/^[ef]?grep$/.test(head)) return false;
+      const recursive = args.some((a) =>
+        /^(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive|--dereference-recursive)$/.test(
+          a,
+        ),
+      );
+      if (!recursive || args.some((a) => /^--exclude=["']?\.env/.test(a))) {
+        return false;
+      }
+      // The first operand is the pattern, whether given bare or after -e.
+      const paths = args.filter((a) => !a.startsWith("-")).slice(1);
+      return (
+        paths.length === 0 ||
+        paths.some((p) => /^(\.{1,2}\/?|\/.*|~.*)$/.test(p) || /\.env/.test(p))
+      );
+    });
+}
+
+/** Exclusion arguments name .env only to keep it out of a search. */
+function withoutExclusions(command: string): string {
+  return command.replace(
+    /\s(--exclude(-dir)?=\S+|(-g|--glob)[\s=]*["']?!\S+)/g,
+    " ",
+  );
+}
 
 /**
  * Commit messages, PR titles and bodies often name protected files ("add .env
@@ -225,9 +296,9 @@ const AT = String.raw`(^|[;&|(){\x60\n]\s*|\b(?:sudo|time|command|exec|nohup|the
 const ENDS = String.raw`\s*($|[|;&>)}\x60])`;
 
 /**
- * Ways to print the process environment, which holds the API key. Scripts and
- * test suites can still read it; masking it needs the SDK sandbox's credential
- * settings.
+ * Ways to print the process environment, a credential variable from it, or a
+ * keychain entry. Scripts and test suites can still read the environment;
+ * masking it needs the SDK sandbox's credential settings.
  */
 const ENV_DUMP = [
   new RegExp(String.raw`${AT}env(\s+-\S*)*${ENDS}`),
@@ -264,6 +335,7 @@ const PROTECTED_WRITE = [
 const CONFIG_MENTION = [
   /(^|[^\w.-])\.(claude|git)(?=$|[/\s"'|;&)<>])/i,
   /\.mcp\.json\b/i,
+  /\bid_(rsa|ed25519|ecdsa|dsa)\.pub\b/i,
 ];
 
 const READ_ONLY_COMMANDS = new Set([
@@ -283,7 +355,6 @@ const READ_ONLY_COMMANDS = new Set([
   "du",
   "tree",
   "pwd",
-  "cd",
   "echo",
   "test",
   "[",
@@ -301,10 +372,11 @@ const READ_ONLY_GIT = new Set([
 ]);
 
 /**
- * True when every command in the pipeline only reads. Writes can come from
- * dozens of verbs (touch, mkdir, tar, curl -o, perl -i…), so commands that
- * mention protected paths are judged by what they are allowed to be, not by
- * a list of what they must not be.
+ * True when every command in the pipeline or list is on the read-only allowlist
+ * and uses none of the write or exec flags below. Writes can come from dozens
+ * of verbs (touch, mkdir, tar, curl -o, perl -i…), so commands that mention
+ * protected paths are judged by what they are allowed to be, not by a list of
+ * what they must not be. Best effort, not proof.
  */
 function isReadOnly(command: string): boolean {
   // Nested commands run whatever they contain, whatever the outer verb is.
@@ -319,7 +391,7 @@ function isReadOnly(command: string): boolean {
     .every((segment) => {
       // Flags that make a reading command write a file or run a program.
       if (
-        /(^|\s)(--output\b|--pre\b|--ext-diff\b|-fls\b|-fprint)/.test(
+        /(^|\s)(--output\b|--pre\b|--ext-diff\b|--open-files-in-pager\b|-O\S*|-fls\b|-fprint)/.test(
           segment,
         ) ||
         /^tree\b.*\s-o\b/.test(segment)
@@ -331,7 +403,8 @@ function isReadOnly(command: string): boolean {
         .replace(/^\\/, "")
         .replace(/^git\s+((-C\s+\S+|--no-pager)\s+)+/, "git ")
         .split(/\s+/);
-      // Judged before git's global options are stripped, so `git -c ...` never counts as read-only.
+      // This sees the raw command, not normalizeGit's output, and only -C and
+      // --no-pager are dropped above, so `git -c key=value …` is never read-only.
       if (head === "git") return READ_ONLY_GIT.has(sub);
       if (head === "find")
         return !/\s-(delete|exec|execdir|ok|fprint)/.test(segment);
@@ -408,6 +481,39 @@ function realTarget(cwd: string, path: string): string {
   throw new Error(`Too many symbolic links resolving ${path}`);
 }
 
+/**
+ * A read target is checked where it really points, not only as written: a
+ * committed symlink such as docs/config -> ../.env must not read the secret.
+ */
+function isSecretPath(policy: Policy, path: string): boolean {
+  if (!path) return false;
+  if (SECRET_PATH.some((p) => p.test(path))) return true;
+  const real = realTarget(policy.cwd, path);
+  const inProject = relative(policy.cwd, real);
+  return SECRET_PATH.some((p) => p.test(real) || p.test(inProject));
+}
+
+/**
+ * `git checkout` with a path restores files, discarding their changes, while
+ * `git checkout <branch>` only switches. A path is a second non-option
+ * argument, or a single one that exists in the project.
+ */
+function checkoutDiscards(command: string, cwd: string): boolean {
+  return command
+    .split(/&&|\|\||[|;&\n]/)
+    .map((segment) => segment.trim().split(/\s+/))
+    .some(([git, sub, ...args]) => {
+      if (git !== "git" || sub !== "checkout") return false;
+      if (args.some((a) => /^(-b|-B|--orphan|-t|--track)$/.test(a)))
+        return false;
+      const operands = args.filter((a) => !a.startsWith("-"));
+      return (
+        operands.length >= 2 ||
+        (operands.length === 1 && existsSync(resolve(cwd, operands[0]!)))
+      );
+    });
+}
+
 function containsSecret(
   policy: Policy,
   input: Record<string, unknown>,
@@ -421,8 +527,9 @@ function containsSecret(
 }
 
 /**
- * The single source of truth for what is forbidden. Returns a reason when the
- * call must be blocked, or null when it is acceptable.
+ * What is forbidden for any caller, manager or specialist. Returns a reason
+ * when the call must be blocked, or null when it is acceptable. The manager's
+ * own tool boundary is checked separately, in createSafetyHooks.
  */
 export function denyReason(
   policy: Policy,
@@ -452,31 +559,36 @@ export function denyReason(
     const raw = asString(input.command).replace(/\\\r?\n/g, " ");
     const command = normalizeGit(raw);
     const hit = HARD_DENY.find(
-      (rule) => rule.pattern.test(command) || rule.pattern.test(raw),
+      (rule) =>
+        rule.pattern.test(command) ||
+        (rule.raw === true && rule.pattern.test(raw)),
     );
     if (hit) {
       return `Blocked by the team's safety policy (${hit.why}). If this is genuinely required, ask the human operator to run it directly.`;
     }
-    const mentions = withoutMessages(raw);
+    if (checkoutDiscards(command, policy.cwd)) {
+      return "Blocked by the team's safety policy (git checkout with a path discards uncommitted changes). If this is genuinely required, ask the human operator to run it directly.";
+    }
+    const mentions = withoutExclusions(withoutMessages(raw));
     if (
       (!IGNORE_FILE_APPEND.test(mentions) &&
         SECRET_IN_TEXT.some((p) => p.test(mentions))) ||
+      SECRET_SCAN.some((p) => p.test(raw)) ||
+      recursiveGrepReachesSecrets(raw) ||
       ENV_DUMP.some((p) => p.test(command))
     ) {
       return "That command reads secrets or the process environment. Ask the human operator for what you need instead.";
     }
-    // A protected path can also be written from the shell, which never reaches
-    // the Write tool, so any command touching one must be read-only.
+    // .git, .claude, .mcp.json and public keys can also be written from the
+    // shell, which never reaches the Write tool, so a command that mentions
+    // them must be read-only. Secret paths were already refused above.
     if (CONFIG_MENTION.some((p) => p.test(mentions)) && !isReadOnly(mentions)) {
       return "That command may write to git internals or agent configuration. Only read-only commands may touch those paths; ask the human operator to do it directly.";
     }
     return null;
   }
 
-  if (
-    toolName === "Read" &&
-    SECRET_PATH.some((p) => p.test(targetPath(input)))
-  ) {
+  if (toolName === "Read" && isSecretPath(policy, targetPath(input))) {
     return "That file holds secrets. Ask the human operator for what you need instead.";
   }
 
@@ -487,7 +599,7 @@ export function denyReason(
       toolName === "Glob" ? asString(input.pattern) : "",
     ];
     if (
-      SECRET_PATH.some((p) => p.test(path)) ||
+      isSecretPath(policy, path) ||
       globs.some((g) => g && SECRET_IN_TEXT.some((p) => p.test(g)))
     ) {
       return "That search targets files that hold secrets.";
@@ -525,12 +637,13 @@ function safeDenyReason(
 }
 
 /**
- * The hard-deny list lives in a PreToolUse hook rather than in `canUseTool`
- * because `canUseTool` is skipped whenever the permission mode already
- * auto-approves a call — under `acceptEdits` or `bypassPermissions` it would
- * never see an Edit at all. The hook runs for every tool call in every mode,
- * including calls made inside subagents, so "yes to everything" still cannot
- * mean "yes to rm -rf".
+ * The safety policy (denyReason plus the manager's tool boundary) runs as a
+ * PreToolUse hook rather than in `canUseTool`, because `canUseTool` is
+ * skipped whenever the permission mode or allowedTools already approves a
+ * call. The hook screens foreground calls in every mode, subagents' included,
+ * and it forces every delegation into the foreground because background
+ * agents' later calls bypassed it. So "yes to everything" still cannot mean
+ * "yes to rm -rf".
  */
 export function createSafetyHooks(
   policy: Policy,
@@ -589,24 +702,44 @@ export function createSafetyHooks(
 }
 
 /**
- * Interactive approval for everything the hook did not already reject. Only
- * reached in `default` mode; `--yes` relies on the hook alone.
+ * Asks the human about calls the permission mode and allowedTools did not
+ * already approve. Installed only for interactive runs: under --yes there is
+ * no gate, so an unapproved call is refused, and the hook screens everything.
  */
-export function createPermissionGate(policy: Policy): CanUseTool {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
+export function createPermissionGate(
+  policy: Policy,
+  ask?: (question: string) => Promise<string>,
+): CanUseTool {
+  // Opened on first use so tests and --yes runs never hold stdin open.
+  let rl: ReturnType<typeof createInterface> | undefined;
+  const question =
+    ask ??
+    ((text: string) => {
+      if (!rl) {
+        rl = createInterface({ input: process.stdin, output: process.stdout });
+        // Ctrl-C at the prompt stops the run instead of leaving it waiting.
+        rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"));
+      }
+      return rl.question(text);
+    });
 
   return async (toolName, input): Promise<PermissionResult> => {
     const reason = safeDenyReason(policy, toolName, input);
     if (reason !== null) return { behavior: "deny", message: reason };
 
-    // Control characters could rewrite the prompt line the human is approving.
-    const detail = (
+    // Show what the call will actually do: the command, the path, the URL, or
+    // else the arguments, so nothing (an MCP query, a fetch) is approved blind.
+    // Control characters are stripped because they could rewrite this line.
+    const shown =
       toolName === "Bash"
         ? asString(input.command)
-        : targetPath(input) || asString(input.pattern)
-    ).replace(/[\x00-\x1f\x7f]+/g, " ");
+        : targetPath(input) ||
+          asString(input.url) ||
+          asString(input.pattern) ||
+          JSON.stringify(input);
+    const detail = shown.replace(/[\x00-\x1f\x7f]+/g, " ").slice(0, 2000);
 
-    const answer = await rl.question(
+    const answer = await question(
       `\n  ⚠  ${toolName}${detail ? `  ${detail}` : ""}\n     allow? [y/N] `,
     );
 
