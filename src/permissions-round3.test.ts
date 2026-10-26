@@ -179,7 +179,8 @@ describe("approval: only this session's own directory is exempt, and symlinks ar
     mkdirSync(join(project, "links"), { recursive: true });
     symlinkSync("/etc", join(project, "links", "etclink"));
     assert.match(
-      approvalReason(policy, "Read", { file_path: "links/etclink/hosts" }) ?? "",
+      approvalReason(policy, "Read", { file_path: "links/etclink/hosts" }) ??
+        "",
       OUTSIDE,
     );
     assert.match(
@@ -196,7 +197,9 @@ describe("I3: commit and PR messages are judged without their text", () => {
     bash("git commit -am 'chore: never git push --force'"),
     bash('gh pr create --title x --body "never run git push --force"'),
     bash('gh pr create -t "drop git clean -fd" -b "printenv was removed"'),
-    bash('gh issue create --title "rm -rf in setup.sh" --body "see git reset --hard"'),
+    bash(
+      'gh issue create --title "rm -rf in setup.sh" --body "see git reset --hard"',
+    ),
     bash('gh pr comment 4 --body "the hook blocks rm -rf ~"'),
     bash('gh pr edit 4 --body "explains git config alias.x"'),
     bash('git tag -a v1 -m "rm -rf is blocked now"'),
@@ -204,9 +207,8 @@ describe("I3: commit and PR messages are judged without their text", () => {
     bash(
       "git commit -m \"$(cat <<'EOF'\nfix: ignore .env files\n\ngit reset --hard is blocked\nEOF\n)\"",
     ),
-    bash(
-      'git commit -m "$(cat <<"EOF"\nfix: stop rm -rf in cleanup\nEOF\n)"',
-    ),
+    // (The `<<"EOF"` heredoc is no longer stripped: only the exact
+    // `<<'EOF'` form is; see permissions-messages.test.ts.)
   ]);
   denies(SAFETY("recursive delete"), [
     bash('git commit -m "$(rm -rf src)"'),
@@ -229,7 +231,10 @@ describe("I3: commit and PR messages are judged without their text", () => {
 
 describe("I4: delegations run in the checkout, never in an isolated copy", () => {
   denies(/Delegate without isolation/, [
-    ["Agent", { subagent_type: "qa-tester", prompt: "p", isolation: "worktree" }],
+    [
+      "Agent",
+      { subagent_type: "qa-tester", prompt: "p", isolation: "worktree" },
+    ],
     ["Task", { subagent_type: "qa-tester", prompt: "p", isolation: "remote" }],
     ["Agent", { subagent_type: "qa-tester", prompt: "p", isolation: "" }],
   ]);
@@ -322,9 +327,21 @@ describe("malformed tool input is denied, not read as empty", () => {
         } as HookInput,
         "t1",
         { signal: new AbortController().signal },
-      )) as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } };
-      assert.equal(out.hookSpecificOutput?.permissionDecision, "deny", String(tool_input));
-      assert.match(out.hookSpecificOutput?.permissionDecisionReason ?? "", /not an object/);
+      )) as {
+        hookSpecificOutput?: {
+          permissionDecision?: string;
+          permissionDecisionReason?: string;
+        };
+      };
+      assert.equal(
+        out.hookSpecificOutput?.permissionDecision,
+        "deny",
+        String(tool_input),
+      );
+      assert.match(
+        out.hookSpecificOutput?.permissionDecisionReason ?? "",
+        /not an object/,
+      );
     }
   });
 });
@@ -333,7 +350,10 @@ describe("a word that cannot be checked denies instead of passing", () => {
   const locked = join(project, "locked");
   mkdirSync(locked, { mode: 0o000 });
   it("denies a command naming a file it cannot lstat (EACCES)", async () => {
-    assert.throws(() => denyReason(policy, "Bash", { command: "cat locked/config" }), /EACCES/);
+    assert.throws(
+      () => denyReason(policy, "Bash", { command: "cat locked/config" }),
+      /EACCES/,
+    );
     // The hook turns the throw into a deny.
     const out = (await createSafetyHooks(policy).PreToolUse[0]!.hooks[0]!(
       {
@@ -349,17 +369,31 @@ describe("a word that cannot be checked denies instead of passing", () => {
       } as HookInput,
       "t1",
       { signal: new AbortController().signal },
-    )) as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } };
+    )) as {
+      hookSpecificOutput?: {
+        permissionDecision?: string;
+        permissionDecisionReason?: string;
+      };
+    };
     assert.equal(out.hookSpecificOutput?.permissionDecision, "deny");
-    assert.match(out.hookSpecificOutput?.permissionDecisionReason ?? "", /could not evaluate this call \(EACCES/);
+    assert.match(
+      out.hookSpecificOutput?.permissionDecisionReason ?? "",
+      /could not evaluate this call \(EACCES/,
+    );
   });
   allows([bash(`echo ${"x".repeat(5000)}`), bash("cat missing/file.txt")]);
 });
 
 describe("the policy's agent lists cannot be changed after it is built", () => {
   it("refuses to add to agents or pinnedModels", () => {
-    assert.throws(() => (policy.agents as Set<string>).add("intruder"), /read-only/);
-    assert.throws(() => (policy.pinnedModels as Set<string>).delete("x"), /read-only/);
+    assert.throws(
+      () => (policy.agents as Set<string>).add("intruder"),
+      /read-only/,
+    );
+    assert.throws(
+      () => (policy.pinnedModels as Set<string>).delete("x"),
+      /read-only/,
+    );
     assert.equal(policy.agents.has("intruder"), false);
   });
 });
@@ -371,7 +405,10 @@ describe("jq's env builtin prints the environment", () => {
     bash("jq -n 'env.ANTHROPIC_API_KEY'"),
     bash("echo {} | jq 'env | keys'"),
   ]);
-  allows([bash("jq .version package.json"), bash("jq '.scripts.test' package.json")]);
+  allows([
+    bash("jq .version package.json"),
+    bash("jq '.scripts.test' package.json"),
+  ]);
 });
 
 describe("re-review 1: a nested shell's -cm is not a message", () => {
@@ -386,7 +423,9 @@ describe("re-review 1: a nested shell's -cm is not a message", () => {
     bash("git tag v1 $(sh -cm 'env')"),
   ]);
   denies(SAFETY("hides the command it runs"), [
-    bash(`git commit -m 'rm -rf src' && bash -c "$(git log -1 --format=%s)"`),
+    // The message is no longer stripped here (`&&`), so its own rm is seen
+    // first; the computed script is pinned without it.
+    bash(`git commit -m 'x' && bash -c "$(git log -1 --format=%s)"`),
     bash("sh -c `git log -1 --format=%s`"),
     bash('eval "$(git log -1 --format=%s)"'),
   ]);

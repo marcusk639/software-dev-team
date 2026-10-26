@@ -6,6 +6,7 @@ import {
   gitConfigWrites,
   gitGlobalOptionReason,
   normalizeGit,
+  shellWords,
 } from "./git.js";
 import { globTargets, hasDotLedWildcard } from "./globs.js";
 import {
@@ -158,13 +159,6 @@ const HARD_DENY: Array<{
     why: "deletes files with uncommitted changes",
   },
   {
-    // `git rm -r --cached` only untracks; without --cached it deletes.
-    pattern:
-      // --cached counts only as an option: not after `--` (a path) or in a comment.
-      /\bgit\s+rm\b(?!(?:(?!\s(?:--(?=\s|$)|#))[^|;&\n])*\s--cached(?=\s|$))[^|;&\n]*\s(?:-[a-zA-Z]*r[a-zA-Z]*|--recursive)(?=\s|$)/,
-    why: "recursive delete",
-  },
-  {
     pattern: /\bxargs\b[^|;&\n]*?\s(?:\S*\/)?(?:rm|rmdir|shred|unlink)(?=\s|$)/,
     why: "recursive delete",
   },
@@ -181,6 +175,25 @@ const HARD_DENY: Array<{
     // `bash -c "$(git log -1 --format=%s)"`, `eval "$x"`, `sh -c \`…\``.
     pattern:
       /(?:\b(?:ba|z|da|k|fi)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*|\beval)\s+["']?(?:\$[({A-Za-z_]|\x60)/,
+    why: "hides the command it runs",
+  },
+  {
+    // The same with the substitution anywhere in the script, after options
+    // such as --norc or a `--`: `bash -c "true; $(…)"`, `sh -c -- "$(…)"`.
+    pattern:
+      /(?<![\w.-])(?:\S*\/)?(?:ba|z|da|k)?sh(?:\s+(?:--?[\w-]+|--))*?\s+-[a-zA-Z]*c[a-zA-Z]*(?:\s+(?:--?[\w-]+|--))*\s+(?:"(?:[^"\\]|\\.)*?(?:\$\(|\x60|<\()|'[^']*?(?:\$\(|\x60|<\()|\S*?(?:\$\(|\x60|<\())/,
+    why: "hides the command it runs",
+  },
+  {
+    // eval with a substitution anywhere after it.
+    pattern: /(?<![\w.-])eval\b[\s\S]*?(?:\$\(|\x60|<\()/,
+    why: "hides the command it runs",
+  },
+  {
+    // A script read from process substitution, or a commit message piped
+    // back into a shell: `bash <(…)`, `source <(…)`, `git log … | sh`.
+    pattern:
+      /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh|source|\.)\s+<\(|\bgit\s+(?:log|show)\b[^;&\n]*\|\s*(?:\S*\/)?(?:ba|z|da|k)?sh\b/,
     why: "hides the command it runs",
   },
   {
@@ -245,74 +258,132 @@ function spellings(raw: string): string[] {
 }
 
 /**
- * Commands whose options carry a message, with those options. Their text is
- * prose: "explain why git reset --hard is blocked" runs nothing.
+ * The simple commands whose message values are prose, and the options that
+ * carry them. "explain why git reset --hard is blocked" runs nothing.
  */
-const MESSAGE_COMMANDS: ReadonlyArray<{ head: RegExp; flags: string }> = [
+const MESSAGE_COMMANDS: ReadonlyArray<{ head: RegExp; flag: RegExp }> = [
   {
-    head: /(?:^|[\s(])git(?:\s+-\S+(?:\s+[^-\s]\S*)?)*?\s+(?:commit|tag|notes\s+(?:add|append)|merge|stash(?:\s+(?:push|save))?)\b/,
-    flags: String.raw`-[a-zA-Z]*m|--message`,
+    head: /^git (?:commit|tag|notes (?:add|append)|stash(?: (?:push|save))?)$/,
+    flag: /^(?:-[a-zA-Z]*m|--message)$/,
   },
   {
-    head: /(?:^|[\s(])gh\s+(?:pr|issue|release)\s+(?:create|edit|comment|review)\b/,
-    flags: String.raw`--title|--body|--notes|-[tbn]`,
+    head: /^gh (?:pr|issue) (?:create|edit|comment)$/,
+    flag: /^(?:--title|--body|-t|-b)$/,
   },
 ];
 
+/** A character outside a literal quoted span that ends, nests or expands a command. */
+const NOT_SIMPLE = /[$`"(){}<>;&|\n#\\]/;
+
+/** One word of a simple command: its raw text, and whether it is a single literal quoted span. */
+interface Word {
+  readonly raw: string;
+  readonly quoted: boolean;
+}
+
 /**
- * A message value whose text cannot run anything: single-quoted (literal;
- * single quotes nested in a double-quoted string, which would expand them,
- * are masked by withoutMessages and never reach this), double-quoted with no
- * `$` or backtick, or the `"$(cat <<'EOF' … EOF)"` form whose quoted
- * delimiter turns expansion off.
+ * The words of `command` when it is one simple command made of plain text
+ * and literal quoted spans: single-quoted, or double-quoted with no `$`,
+ * backtick or backslash. Null for anything else: an unclosed quote, a
+ * separator, a substitution, a redirect, a group or a comment.
  */
-const MESSAGE_VALUE = String.raw`(?:'[^']*'|"(?:[^"\\$\x60]|\\.)*"|"\$\(\s*cat\s+<<-?\s*(['"])(\w+)\2[ \t]*\n[\s\S]*?\n[ \t]*\3[ \t]*\n?\s*\)")`;
-
-/** Characters after which a new command starts: separators and nesting openers. */
-const SEGMENT_STARTS = [";", "&", "|", "\n", "(", "{", "\x60"];
-
-/** True when the end of `masked` lies inside `$(…)`, `<(…)`, `(…)`, `{…}` or backticks. */
-function insideNesting(masked: string): boolean {
-  const opened = (masked.match(/[({]/g) ?? []).length;
-  const closed = (masked.match(/[)}]/g) ?? []).length;
-  const ticks = (masked.match(/\x60/g) ?? []).length;
-  return opened > closed || ticks % 2 === 1;
-}
-
-/** Quoted text blanked to the same length, so a `;` inside a message is not a separator. */
-function maskQuotes(command: string): string {
-  return command.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, (q) => "x".repeat(q.length));
+function simpleWords(command: string): Word[] | null {
+  const words: Word[] = [];
+  let raw = "";
+  let spans = 0;
+  let plain = false;
+  const end = () => {
+    if (raw) words.push({ raw, quoted: spans === 1 && !plain });
+    raw = "";
+    spans = 0;
+    plain = false;
+  };
+  for (let i = 0; i < command.length; i += 1) {
+    const c = command[i]!;
+    if (c === "'" || c === '"') {
+      const close = command.indexOf(c, i + 1);
+      if (close === -1) return null;
+      const body = command.slice(i + 1, close);
+      if (c === '"' && /[$`\\]/.test(body)) return null;
+      raw += command.slice(i, close + 1);
+      spans += 1;
+      i = close;
+    } else if (c === " " || c === "\t") {
+      end();
+    } else if (NOT_SIMPLE.test(c)) {
+      return null;
+    } else {
+      raw += c;
+      plain = true;
+    }
+  }
+  end();
+  return words;
 }
 
 /**
- * Commit messages, PR titles and bodies, tag and note messages often name a
- * blocked command or a protected file ("add .env to .gitignore", "explain why
- * git reset --hard is blocked"). Their text is dropped before any check, but
- * only on a command that takes a message (MESSAGE_COMMANDS): `bash -cm '…'`
- * runs its argument. Text that could run a substitution is kept, so
- * `-m "$(cat .env)"` and an unquoted heredoc are still seen.
+ * Claude Code's commit form, matched whole: `git commit [flags] -m
+ * "$(cat <<'EOF'` NL body NL `EOF` NL `)"`, or `<<-'EOF'` with a
+ * tab-indented terminator. The quoted delimiter turns expansion off, so the
+ * body is text, as long as no line of it ends the heredoc early.
+ */
+const COMMIT_HEREDOC =
+  /^git commit((?: --?[A-Za-z][\w-]*)*) -m "\$\(cat <<(-?)'EOF'\n([\s\S]*)\n(\t*)EOF\n\)"$/;
+
+/**
+ * Commit messages, PR titles and bodies, tag, note and stash messages often
+ * name a blocked command or a protected file. Their text is dropped before
+ * the checks only in two exact shapes: the whole command is one simple
+ * git/gh command (MESSAGE_COMMANDS) whose message values are literal quoted
+ * spans, or it is Claude Code's commit heredoc. Anything else (a
+ * substitution, a separator, a subshell, a group) is screened whole.
  */
 function withoutMessages(command: string): string {
-  const masked = maskQuotes(command);
-  let out = command;
-  for (const { head, flags } of MESSAGE_COMMANDS) {
-    const option = new RegExp(
-      String.raw`(\s(?:${flags})(?:=|\s+))${MESSAGE_VALUE}`,
-      "g",
-    );
-    out = out.replace(option, (match, prefix: string, ...rest) => {
-      const offset = rest[rest.length - 2] as number;
-      const before = masked.slice(0, offset);
-      // Inside a substitution or subshell the option may belong to a nested
-      // shell (`git commit $(sh -cm '…')`), so nothing there is stripped.
-      if (insideNesting(before)) return match;
-      const segment = before.slice(
-        Math.max(...SEGMENT_STARTS.map((sep) => before.lastIndexOf(sep))) + 1,
-      );
-      return head.test(segment) ? `${prefix}''` : match;
-    });
+  const trimmed = command.trim();
+  const heredoc = COMMIT_HEREDOC.exec(trimmed);
+  if (heredoc) {
+    const [, flags, dash, body, tabs] = heredoc;
+    const ends = dash ? /^\t*EOF$/m : /^EOF$/m;
+    if ((dash || tabs === "") && !ends.test(body!)) {
+      return `git commit${flags} -m ''`;
+    }
+    return command;
   }
-  return out;
+  const words = simpleWords(trimmed);
+  if (words === null) return command;
+  for (const { head, flag } of MESSAGE_COMMANDS) {
+    // The command is its first two or three plain words: `git commit`, `git notes add`.
+    // `git -C dir commit` is still git commit; no other global option is.
+    const skip =
+      words[0]?.raw === "git" && words[1]?.raw === "-C" && words[2] && !words[2].quoted
+        ? 2
+        : 0;
+    const command = [words[0]!, ...words.slice(1 + skip)];
+    const named = [3, 2].some((n) => {
+      const lead = command.slice(0, n);
+      return (
+        lead.length === n &&
+        lead.every((w) => !w.quoted) &&
+        head.test(lead.map((w) => w.raw).join(" "))
+      );
+    });
+    if (!named) continue;
+    return words
+      .map((word, i) => {
+        const before = words[i - 1];
+        if (word.quoted && before && !before.quoted && flag.test(before.raw)) {
+          return "''";
+        }
+        // `--message='…'` and `-m'…'`: the flag and its value in one word.
+        const joined = /^(-[a-zA-Z]*m|--[a-z]+=?)(['"].*['"])$/s.exec(word.raw);
+        if (joined && flag.test(joined[1]!.replace(/=$/, ""))) {
+          return `${joined[1]}''`;
+        }
+        return word.raw;
+      })
+      .join(" ");
+  }
+  return command;
 }
 
 /** `echo .env >> .gitignore` names a secret file without reading it. */
@@ -592,6 +663,31 @@ function checkoutDiscards(command: string, cwd: string | undefined): boolean {
 }
 
 /**
+ * `git rm -r` without `--cached` deletes the files. The words are read as
+ * git sees them (quotes removed, a `#` word ends the command), and only
+ * options before `--` count: after it, `--cached` is a path.
+ */
+function gitRmDeletes(command: string): boolean {
+  const scan = (text: string) =>
+    [...text.matchAll(/(?<![\w.-])git\s+rm(?=\s|$)/g)].some((match) => {
+      const words = shellWords(text.slice(match.index + match[0].length));
+      const end = words.indexOf("--");
+      const options = (end === -1 ? words : words.slice(0, end)).filter((w) =>
+        w.startsWith("-"),
+      );
+      return (
+        options.some((w) => /^(-[a-zA-Z]*r[a-zA-Z]*|--recursive)$/.test(w)) &&
+        !options.includes("--cached")
+      );
+    });
+  const normalized = normalizeGit(expandLongOptions(command));
+  // A quoted command name (`g'it' rm`) is only seen once dequoted.
+  return /(?<![\w.-])git\s+rm(?=\s|$)/.test(normalized)
+    ? scan(normalized)
+    : scan(normalizeGit(expandLongOptions(dequote(command))));
+}
+
+/**
  * Why a Bash command is refused, or null. `cwd` lets words that name files
  * be resolved through symlinks; without it (the allowlist's use) only the
  * text is judged.
@@ -609,6 +705,7 @@ export function bashDenyReason(command: string, cwd?: string): string | null {
         rule.pattern.test(form),
       ),
     )?.why ??
+    (gitRmDeletes(withoutMessages(raw)) ? "recursive delete" : undefined) ??
     (normalized.some((form) => checkoutDiscards(form, cwd))
       ? "git checkout with a path discards uncommitted changes"
       : undefined) ??
