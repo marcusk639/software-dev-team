@@ -17,13 +17,20 @@ export const READ_ONLY = [
   "WebSearch",
   "WebFetch",
 ] as const;
+
 export const IMPLEMENTER = [
-  "Read",
+  ...READ_ONLY,
   "Write",
   "Edit",
-  "Grep",
-  "Glob",
   "Bash",
 ] as const;
+
+/**
+ * Turn caps per delegation. The manager's --max-turns does not bound a
+ * specialist's own loop, so each role gets a ceiling that leaves room for
+ * real work while stopping a specialist that is going in circles.
+ */
+export const ADVISORY_MAX_TURNS = 30;
+export const IMPLEMENTER_MAX_TURNS = 60;
 
 export const advisory = (tools: readonly string[] = READ_ONLY) => [...tools];

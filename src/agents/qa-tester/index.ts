@@ -1,4 +1,4 @@
-import { advisory, IMPLEMENTER, type AgentSpec } from "../shared.js";
+import { IMPLEMENTER_MAX_TURNS, advisory, IMPLEMENTER, type AgentSpec } from "../shared.js";
 
 export const agent: AgentSpec = {
   description:
@@ -10,5 +10,6 @@ export const agent: AgentSpec = {
   // mechanical, spec-complete work, never for the thing that catches error.
   model: "opus",
   tools: advisory([...IMPLEMENTER]),
+  maxTurns: IMPLEMENTER_MAX_TURNS,
   promptFile: new URL("./prompt.md", import.meta.url),
 };
