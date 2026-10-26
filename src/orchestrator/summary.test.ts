@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { EMPTY_SUMMARY, foldMessage, foldFailure } from "./summary.js";
+import {
+  EMPTY_SUMMARY,
+  finishSummary,
+  foldFailure,
+  foldMessage,
+} from "./summary.js";
 
 const result = (fields: Record<string, unknown>) =>
   ({
@@ -54,5 +59,27 @@ describe("run summary: later results", () => {
     let summary = foldMessage(EMPTY_SUMMARY, result({ subtype: "error_max_turns", is_error: true }));
     summary = foldMessage(summary, result({ result: "later text" }));
     assert.equal(summary.result, "Run ended: error_max_turns\n\nlater text");
+  });
+});
+
+describe("run summary: what the operator must see", () => {
+  it("includes the SDK's error details in a failed result", () => {
+    const summary = foldMessage(
+      EMPTY_SUMMARY,
+      result({ subtype: "error_during_execution", is_error: true, errors: ["No conversation found with session ID: abc"] }),
+    );
+    assert.equal(summary.result, "Run ended: error_during_execution\nNo conversation found with session ID: abc");
+  });
+
+  it("treats a stream that ended without any result as a failure", () => {
+    const summary = finishSummary(foldMessage(EMPTY_SUMMARY, { type: "system", subtype: "init", session_id: "s1" } as unknown as SDKMessage));
+    assert.equal(summary.isError, true);
+    assert.match(summary.result, /ended without a result/);
+    assert.equal(summary.sessionId, "s1");
+  });
+
+  it("leaves a run that produced a result alone", () => {
+    const done = foldMessage(EMPTY_SUMMARY, result({ result: "ok" }));
+    assert.deepEqual(finishSummary(done), done);
   });
 });

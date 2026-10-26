@@ -18,6 +18,7 @@ async function main(): Promise<number> {
   let cli: Cli | { help: true } | { roles: true; cwd: string };
   try {
     cli = parseArgs(process.argv.slice(2));
+    // Validated now so a bad --allow rule is a usage error, not a failure mid-run.
     if ("task" in cli) resolveAllowedTools(DEFAULT_ALLOWED_TOOLS, cli.allow);
     if (!("help" in cli)) checkProjectDir(cli.cwd);
   } catch (error) {
@@ -89,7 +90,7 @@ async function main(): Promise<number> {
   });
 
   if (summary.ledgerText) {
-    console.log(`\n${DIM}What actually ran:\n${summary.ledgerText}${RESET}`);
+    console.log(`\n${DIM}What actually ran in this run:\n${summary.ledgerText}${RESET}`);
   }
 
   if (summary.isError) console.error(`\n${summary.result}`);
@@ -103,8 +104,16 @@ async function main(): Promise<number> {
   return summary.isError ? 1 : 0;
 }
 
+/**
+ * Exits once stdout has drained: writes to a pipe are asynchronous on macOS,
+ * and exiting straight away can cut off the ledger and the session id.
+ */
+function exitAfterFlush(code: number): void {
+  process.stdout.write("", () => process.exit(code));
+}
+
 main().then(
-  (code) => process.exit(code),
+  (code) => exitAfterFlush(code),
   (error: unknown) => {
     // Configuration mistakes (a misnamed customization file, a missing prompt)
     // reach here; their message is what the user needs. DEBUG=1 shows the stack.
@@ -115,6 +124,6 @@ main().then(
           : error.message
         : error,
     );
-    process.exit(1);
+    exitAfterFlush(1);
   },
 );

@@ -18,7 +18,6 @@ export interface LedgerEntry {
   durationMs?: number | undefined;
 }
 
-/** Tools whose successful calls are evidence. Reads and searches are not recorded unless refused. */
 /**
  * One line, without control characters: the ledger is printed to the
  * operator's terminal, and commands come from the model, so an escape
@@ -140,20 +139,24 @@ export function createLedger(options: {
     return { continue: true };
   };
 
-  function entries(): LedgerEntry[] {
-    return [...byId.values()].filter(
-      (e) =>
-        !NOT_RECORDED.has(e.tool) ||
-        e.outcome === "blocked" ||
-        e.outcome === "refused",
-    );
+  /** Snapshots: the evidence cannot be rewritten by whoever receives it. */
+  function entries(): readonly Readonly<LedgerEntry>[] {
+    return [...byId.values()]
+      .filter(
+        (e) =>
+          !NOT_RECORDED.has(e.tool) ||
+          e.outcome === "blocked" ||
+          e.outcome === "refused",
+      )
+      .map((e) => Object.freeze({ ...e }));
   }
 
   /**
    * What one specialist actually did, as recorded by the hooks, for the
    * manager to set against the specialist's own report. Only harness fields
-   * go in (tool, command or path, outcome); never tool output, which is
-   * untrusted text.
+   * go in (tool, command or path, outcome), plus the first line of a failure
+   * or refusal message, truncated and redacted; never a tool's full output,
+   * which is untrusted text.
    */
   function evidenceFor(agentId: string): string {
     const rows = entries().filter((e) => e.agentId === agentId);
@@ -208,7 +211,7 @@ export function createLedger(options: {
       ) {
         settle(message.tool_use_id, "refused", message.decision_reason);
       } else if (message.type === "result") {
-        for (const denial of message.permission_denials) {
+        for (const denial of message.permission_denials ?? []) {
           settle(denial.tool_use_id, "refused");
         }
       }

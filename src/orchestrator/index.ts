@@ -11,6 +11,7 @@ import {
 import { projectAgentNames } from "../project-agents.js";
 import {
   EMPTY_SUMMARY,
+  finishSummary,
   foldFailure,
   foldMessage,
   type Summary,
@@ -42,9 +43,9 @@ export const PROMPT_NAMES: readonly string[] = [
 ];
 
 /**
- * Rendered per run so edits to prompt.md take effect on the next run. A
- * project's replacement is rendered too, so it can place {{roster}}; appended
- * text is used verbatim.
+ * Rendered per run so edits to prompt.md take effect on the next run. The
+ * body after a project's replacement and section overrides is rendered and
+ * must keep {{roster}}; appended text is used verbatim.
  */
 export function loadOrchestratorPrompt(
   customizations: ReadonlyMap<string, PromptCustomization> = new Map(),
@@ -68,7 +69,7 @@ export function loadOrchestratorPrompt(
   return withAppended(renderPrompt(template, { roster }), custom?.append);
 }
 
-/** Ceiling for unattended runs; override with --max-turns. */
+/** Default turn ceiling for the manager on every run; override with --max-turns. */
 const DEFAULT_MAX_TURNS = 60;
 
 export interface RunOptions {
@@ -88,7 +89,7 @@ export interface RunOptions {
 
 export interface RunSummary extends Summary {
   /** What each role actually ran, recorded by the harness. */
-  ledger: LedgerEntry[];
+  ledger: readonly Readonly<LedgerEntry>[];
   ledgerText: string;
 }
 
@@ -127,7 +128,8 @@ export async function runTeam(options: RunOptions): Promise<RunSummary> {
       PostToolUse: ledger.hooks.PostToolUse,
       PostToolUseFailure: ledger.hooks.PostToolUseFailure,
     },
-    // Only reached in interactive mode; acceptEdits auto-approves before this runs.
+    // Installed only for interactive runs. Under --yes, a call that acceptEdits
+    // and allowedTools don't approve is refused.
     ...(options.autoApprove
       ? {}
       : { canUseTool: createPermissionGate(policy) }),
@@ -145,7 +147,7 @@ export async function runTeam(options: RunOptions): Promise<RunSummary> {
     // Undocumented in sdk.d.ts; verified against 0.3.283. The delegation rule
     // in the safety hook is the enforcement either way.
     env: { ...process.env, CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS: "1" },
-    // An unattended run has no interactive brake, so it always gets a ceiling.
+    // Every run gets a ceiling; an unattended one has no other brake.
     maxTurns: options.maxTurns ?? DEFAULT_MAX_TURNS,
     ...(options.maxBudgetUsd === undefined
       ? {}
@@ -156,17 +158,33 @@ export async function runTeam(options: RunOptions): Promise<RunSummary> {
 
   const stream = query({ prompt: options.task, options: queryOptions });
 
-  let summary = EMPTY_SUMMARY;
+  let summary: Summary = EMPTY_SUMMARY;
   try {
     for await (const message of stream) {
-      options.onMessage?.(message);
-      ledger.observe(message);
+      // The result is folded first, so a fault in the side effects below
+      // cannot lose it, and neither of them may end a run that is working.
       summary = foldMessage(summary, message);
+      sideEffect("renderer", () => options.onMessage?.(message));
+      sideEffect("ledger", () => ledger.observe(message));
     }
   } catch (error) {
     // The ledger is the evidence of what already ran; a failed stream must not lose it.
     summary = foldFailure(summary, error);
   }
 
-  return { ...summary, ledger: ledger.entries(), ledgerText: ledger.format() };
+  return {
+    ...finishSummary(summary),
+    ledger: ledger.entries(),
+    ledgerText: ledger.format(),
+  };
+}
+
+function sideEffect(name: string, run: () => void): void {
+  try {
+    run();
+  } catch (error) {
+    console.error(
+      `The ${name} failed on a message and skipped it: ${(error as Error).message}`,
+    );
+  }
 }

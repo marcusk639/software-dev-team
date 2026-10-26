@@ -330,3 +330,29 @@ describe("delegation evidence wording", () => {
     assert.match(text, /Agent → helper: ok \(nested delegation; its own calls are not listed here\)/);
   });
 });
+
+describe("ledger integrity", () => {
+  it("hands out copies, so a caller cannot rewrite the evidence", async () => {
+    const ledger = createLedger({ cwd: CWD, secretValues: [] });
+    await fire(ledger, { ...base("1", "Bash", { command: "pnpm test" }, "qa-tester"), hook_event_name: "PreToolUse" });
+    await fire(ledger, { ...base("1", "Bash", { command: "pnpm test" }, "qa-tester"), hook_event_name: "PostToolUseFailure", error: "Exit code 1" });
+    const [entry] = ledger.entries();
+    assert.throws(() => {
+      (entry as { outcome: string }).outcome = "ok";
+    });
+    assert.equal(ledger.entries()[0]!.outcome, "failed");
+  });
+
+  it("keeps a hook's block when the call is later also listed as refused", async () => {
+    const ledger = createLedger({ cwd: CWD, secretValues: [] });
+    await fire(ledger, { ...base("4", "Bash", { command: "rm -rf x" }, "qa-tester"), hook_event_name: "PreToolUse" });
+    ledger.block("4", "recursive delete");
+    ledger.observe({ type: "result", permission_denials: [{ tool_name: "Bash", tool_use_id: "4", tool_input: {} }] } as unknown as SDKMessage);
+    assert.deepEqual(ledger.entries().map((e) => [e.outcome, e.note]), [["blocked", "recursive delete"]]);
+  });
+
+  it("tolerates a result without permission_denials", () => {
+    const ledger = createLedger({ cwd: CWD, secretValues: [] });
+    assert.doesNotThrow(() => ledger.observe({ type: "result" } as unknown as SDKMessage));
+  });
+});
