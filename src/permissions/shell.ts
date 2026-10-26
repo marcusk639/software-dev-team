@@ -217,16 +217,58 @@ function spellings(raw: string): string[] {
 }
 
 /**
- * Commit messages, PR titles and bodies often name protected files ("add .env
- * to .gitignore"). Their quoted text is dropped before the mention checks.
- * Double-quoted text that could run a substitution is kept, so
- * `-m "$(cat .env)"` is still seen.
+ * Commands whose options carry a message, with those options. Their text is
+ * prose: "explain why git reset --hard is blocked" runs nothing.
+ */
+const MESSAGE_COMMANDS: ReadonlyArray<{ head: RegExp; flags: string }> = [
+  {
+    head: /(?:^|[\s(])git(?:\s+-\S+(?:\s+[^-\s]\S*)?)*?\s+(?:commit|tag|notes\s+(?:add|append)|merge|stash(?:\s+(?:push|save))?)\b/,
+    flags: String.raw`-[a-zA-Z]*m|--message`,
+  },
+  {
+    head: /(?:^|[\s(])gh\s+(?:pr|issue|release)\s+(?:create|edit|comment|review)\b/,
+    flags: String.raw`--title|--body|--notes|-[tbn]`,
+  },
+];
+
+/**
+ * A message value whose text cannot run anything: single-quoted, double-quoted
+ * with no `$` or backtick, or the `"$(cat <<'EOF' … EOF)"` form whose quoted
+ * delimiter turns expansion off.
+ */
+const MESSAGE_VALUE = String.raw`(?:'[^']*'|"(?:[^"\\$\x60]|\\.)*"|"\$\(\s*cat\s+<<-?\s*(['"])(\w+)\2[ \t]*\n[\s\S]*?\n[ \t]*\3[ \t]*\n?\s*\)")`;
+
+/** Quoted text blanked to the same length, so a `;` inside a message is not a separator. */
+function maskQuotes(command: string): string {
+  return command.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, (q) => "x".repeat(q.length));
+}
+
+/**
+ * Commit messages, PR titles and bodies, tag and note messages often name a
+ * blocked command or a protected file ("add .env to .gitignore", "explain why
+ * git reset --hard is blocked"). Their text is dropped before any check, but
+ * only on a command that takes a message (MESSAGE_COMMANDS): `bash -cm '…'`
+ * runs its argument. Text that could run a substitution is kept, so
+ * `-m "$(cat .env)"` and an unquoted heredoc are still seen.
  */
 function withoutMessages(command: string): string {
-  return command.replace(
-    /(\s(?:-[a-zA-Z]*m|--message|--title|--body)(?:=|\s+))('[^']*'|"(?:[^"\\$\x60]|\\.)*")/g,
-    "$1''",
-  );
+  const masked = maskQuotes(command);
+  let out = command;
+  for (const { head, flags } of MESSAGE_COMMANDS) {
+    const option = new RegExp(
+      String.raw`(\s(?:${flags})(?:=|\s+))${MESSAGE_VALUE}`,
+      "g",
+    );
+    out = out.replace(option, (match, prefix: string, ...rest) => {
+      const offset = rest[rest.length - 2] as number;
+      const before = masked.slice(0, offset);
+      const segment = before.slice(
+        Math.max(...[";", "&", "|", "\n"].map((sep) => before.lastIndexOf(sep))) + 1,
+      );
+      return head.test(segment) ? `${prefix}''` : match;
+    });
+  }
+  return out;
 }
 
 /** `echo .env >> .gitignore` names a secret file without reading it. */
@@ -500,7 +542,9 @@ function checkoutDiscards(command: string, cwd: string | undefined): boolean {
 export function bashDenyReason(command: string, cwd?: string): string | null {
   // bash deletes a backslash-newline, joining the words on either side.
   const raw = command.replace(/\\\r?\n/g, "");
-  const forms = spellings(raw);
+  // Message text is judged as text, never as a command or a mention.
+  const mentions = withoutExclusions(withoutMessages(raw));
+  const forms = spellings(withoutMessages(raw));
   const normalized = forms.map(normalizeGit);
   const why =
     HARD_DENY.find((rule) =>
@@ -518,7 +562,6 @@ export function bashDenyReason(command: string, cwd?: string): string | null {
   if (why) {
     return `Blocked by the team's safety policy (${why}). If this is genuinely required, ask the human operator to run it directly.`;
   }
-  const mentions = withoutExclusions(withoutMessages(raw));
   const mentionForms = [mentions, dequote(mentions)];
   if (
     (!IGNORE_FILE_APPEND.test(mentions) &&

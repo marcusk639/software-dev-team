@@ -186,3 +186,41 @@ describe("approval: only this session's own directory is exempt, and symlinks ar
     );
   });
 });
+
+describe("I3: commit and PR messages are judged without their text", () => {
+  allows([
+    bash('git commit -m "docs: explain why git reset --hard is blocked"'),
+    bash('git commit -m "fix: stop rm -rf in cleanup script"'),
+    bash("git commit -am 'chore: never git push --force'"),
+    bash('gh pr create --title x --body "never run git push --force"'),
+    bash('gh pr create -t "drop git clean -fd" -b "printenv was removed"'),
+    bash('gh issue create --title "rm -rf in setup.sh" --body "see git reset --hard"'),
+    bash('gh pr comment 4 --body "the hook blocks rm -rf ~"'),
+    bash('gh pr edit 4 --body "explains git config alias.x"'),
+    bash('git tag -a v1 -m "rm -rf is blocked now"'),
+    bash('git notes add -m "git push --force is refused"'),
+    bash(
+      "git commit -m \"$(cat <<'EOF'\nfix: ignore .env files\n\ngit reset --hard is blocked\nEOF\n)\"",
+    ),
+    bash(
+      'git commit -m "$(cat <<"EOF"\nfix: stop rm -rf in cleanup\nEOF\n)"',
+    ),
+  ]);
+  denies(SAFETY("recursive delete"), [
+    bash('git commit -m "$(rm -rf src)"'),
+    bash("git commit -m 'x' && rm -rf src"),
+    bash('git commit -m "`rm -rf src`"'),
+    // An unquoted heredoc expands its body.
+    bash('git commit -m "$(cat <<EOF\n$(rm -rf src)\nEOF\n)"'),
+    // A heredoc outside a message runs as a command.
+    bash("$(cat <<'EOF'\nrm -rf src\nEOF\n)"),
+    bash("bash <<'EOF'\nrm -rf src\nEOF"),
+    // A message flag on another command is not a message.
+    bash("bash -cm 'rm -rf src'"),
+  ]);
+  denies(ENV_OR_SECRET, [
+    bash('git commit -m "$(cat .env)"'),
+    bash("bash -cm 'cat .env'"),
+    bash("sh -cm 'printenv'"),
+  ]);
+});
