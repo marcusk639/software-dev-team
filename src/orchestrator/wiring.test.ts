@@ -32,6 +32,41 @@ function target() {
   return cwd;
 }
 
+interface PreToolUseOutput {
+  hookSpecificOutput?: {
+    permissionDecision?: string;
+    permissionDecisionReason?: string;
+    updatedInput?: Record<string, unknown>;
+  };
+}
+
+/** Runs every PreToolUse hook the run installs and returns every output, in order. */
+async function preToolUseOutputs(
+  options: Options,
+  tool: string,
+  toolInput: Record<string, unknown>,
+  agent?: string,
+  toolUseId = `t-${Math.random()}`,
+): Promise<PreToolUseOutput[]> {
+  const input = {
+    hook_event_name: "PreToolUse",
+    session_id: "s",
+    transcript_path: "/t",
+    cwd: options.cwd ?? "/",
+    tool_name: tool,
+    tool_input: toolInput,
+    tool_use_id: toolUseId,
+    ...(agent ? { agent_type: agent, agent_id: "agent-1" } : {}),
+  } as HookInput;
+  const outputs: PreToolUseOutput[] = [];
+  for (const matcher of options.hooks?.PreToolUse ?? []) {
+    for (const hook of matcher.hooks) {
+      outputs.push((await hook(input, toolUseId, { signal })) as PreToolUseOutput);
+    }
+  }
+  return outputs;
+}
+
 /** Runs every PreToolUse hook the run installs and returns the first deny reason. */
 async function preToolUse(
   options: Options,
@@ -176,6 +211,33 @@ describe("runTeam wiring", () => {
       await preToolUse(interactive.queryOptions, "Read", read, "qa-tester"),
       undefined,
     );
+    const asked = (
+      await preToolUseOutputs(interactive.queryOptions, "Read", read, "qa-tester")
+    ).find((out) => out?.hookSpecificOutput?.permissionDecision !== undefined);
+    assert.equal(asked?.hookSpecificOutput?.permissionDecision, "ask");
+    assert.match(asked?.hookSpecificOutput?.permissionDecisionReason ?? "", /outside the project/);
+  });
+
+  it("records a safety deny in the ledger as blocked", async () => {
+    const { queryOptions, ledger } = prepareRun({ task: "t", cwd, autoApprove: true });
+    await preToolUseOutputs(queryOptions, "Bash", { command: "rm -rf src" }, "qa-tester", "blocked-1");
+    const entry = ledger.entries().find((e) => e.toolUseId === "blocked-1");
+    assert.equal(entry?.outcome, "blocked");
+    assert.match(entry?.note ?? "", /recursive delete/);
+  });
+
+  it("keeps Bash in the foreground whatever order the hooks run in", async () => {
+    const { queryOptions } = prepareRun({ task: "t", cwd, autoApprove: true });
+    const outputs = await preToolUseOutputs(
+      queryOptions,
+      "Bash",
+      { command: "pnpm test", run_in_background: true },
+      "qa-tester",
+    );
+    const updated = outputs.filter((o) => o?.hookSpecificOutput?.updatedInput);
+    assert.equal(updated.length, 1);
+    assert.equal(updated[0]!.hookSpecificOutput!.updatedInput!.run_in_background, false);
+    assert.equal(updated[0]!.hookSpecificOutput!.updatedInput!.command, "pnpm test");
   });
 
   it("lets an allow rule open a directory outside --cwd to reads, secrets still denied", async () => {

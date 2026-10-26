@@ -750,6 +750,13 @@ describe("the approval prompt shows what is being approved", () => {
     assert.match(asked.at(-1)!, /select \* from users/);
   });
 
+  it("shows where a Grep or Glob looks, not just its pattern", async () => {
+    await gate("Grep", { pattern: "TODO", path: "/etc", glob: "*.conf" }, options);
+    assert.match(asked.at(-1)!, /TODO in \/etc \(glob \*\.conf\)/);
+    await gate("Glob", { pattern: "/etc/*" }, options);
+    assert.match(asked.at(-1)!, /\/etc\/\* \(from \/etc\)/);
+  });
+
   it("strips control characters from what it shows", async () => {
     await gate("Bash", { command: "echo ok\u001b[2K\rrm nothing" }, options);
     assert.doesNotMatch(asked.at(-1)!, /\u001b|\r/);

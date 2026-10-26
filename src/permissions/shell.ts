@@ -256,6 +256,9 @@ const ENV_DUMP = [
   /\bscript\b[^|;&\n]*\s(?:env|printenv|set|export|declare)(?=\s|$)/,
   /\$\{?[A-Za-z_]*(API_?KEY|TOKEN|SECRET|PASSW(OR)?D|PRIVATE_KEY|CREDENTIAL)/i,
   /\/proc\/\S*\/environ\b/,
+  // Indirect expansion reads a variable by a computed name: `${!n}`, and
+  // `${!A*}` lists names to read that way.
+  /\$\{!/,
   // Only inside an interpreter one-liner: code that mentions process.env is
   // ordinary, and grepping or editing it must keep working.
   /\b(node|nodejs|python3?|ruby|perl|deno|bun|php)\b[^|&\n]*\s(-e|-c|-p|-E|-r|--eval|--print)\b[^\n]*(\benv\b|environ|getenv|\bENV\b|%ENV|\$_ENV)/,
@@ -281,6 +284,7 @@ const CONFIG_MENTION = [
 function mentionsProtectedGlob(command: string): boolean {
   return command
     .split(SHELL_WORD_SPLIT)
+    .map(expandVariables)
     .filter((word) => /[?*[{]/.test(word))
     .some((word) => {
       if (hasDotLedWildcard(word)) return true;
@@ -383,6 +387,20 @@ const READS_SUBSTITUTION =
 
 const SHELL_WORD_SPLIT = /[\s|;&()<>=\x60]+/;
 
+const VARIABLE = /\$(?:\{[A-Za-z_][\w]*\}|[A-Za-z_]\w*|[0-9@*#?])/g;
+
+/**
+ * A word with its variables replaced by `*`, then dequoted: `"$f"v` becomes
+ * `*v`, `CLA"$u"DE.md` becomes `CLA*DE.md`, so the glob checks see every
+ * name the word could spell. A word that is only a variable (`"$FILE"`) is
+ * returned as it was: it names nothing the checks can judge.
+ */
+function expandVariables(word: string): string {
+  if (!word.includes("$")) return word;
+  const expanded = dequote(word.replace(VARIABLE, "*"));
+  return /^\**$/.test(expanded) ? word : expanded;
+}
+
 /**
  * True when a word of the command reaches a secret: a wildcard that could
  * expand to one (`.e?v`, `~/.ss*\/i*`, `/proc/self/env*`), or a path inside
@@ -396,7 +414,8 @@ function wordsReachSecret(command: string, cwd: string | undefined): boolean {
       const words = segment.split(SHELL_WORD_SPLIT).filter(Boolean);
       // These print names, not contents: `ls -d .*` lists, it does not read.
       if (NAME_ONLY.has(words[0] ?? "")) return false;
-      return words.some((word) => {
+      return words.some((spelled) => {
+        const word = expandVariables(spelled);
         if (/[?*[{]/.test(word)) return isSecretWord(word);
         if (cwd === undefined || word.startsWith("-") || word.includes("$")) {
           return false;

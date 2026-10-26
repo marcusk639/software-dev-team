@@ -5,6 +5,7 @@ import type {
   PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
 import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
@@ -18,6 +19,7 @@ import {
   DELEGATION_TOOLS,
   isOneOf,
   MANAGER_ALLOWED,
+  type ToolName,
   WRITE_TOOLS,
 } from "./tools.js";
 
@@ -223,7 +225,45 @@ function safeDenyReason(
   }
 }
 
-const READ_TOOLS = ["Read", "Grep", "Glob"];
+const READ_TOOLS = ["Read", "Grep", "Glob"] as const satisfies readonly ToolName[];
+
+/**
+ * The directory a glob starts from: its segments before the first wildcard,
+ * with `~` as the home directory, resolved against `base`. `/etc/*` starts at
+ * /etc, `../../**` two levels up, `src/*.ts` at src.
+ */
+function globBase(glob: string, base: string): string {
+  const segments = glob.split("/");
+  const wild = segments.findIndex((s) => /[?*[{]/.test(s));
+  const fixed = (wild === -1 ? segments : segments.slice(0, wild)).join("/");
+  if (fixed === "~" || fixed.startsWith("~/")) {
+    return resolve(homedir(), `.${fixed.slice(1)}`);
+  }
+  return resolve(base, fixed || (glob.startsWith("/") ? "/" : "."));
+}
+
+/**
+ * Every place a read tool call can reach: Read's file, Grep's and Glob's
+ * `path`, the static base of Glob's pattern, and the base of each Grep glob
+ * piece that is absolute, starts at `~` or climbs with `..`.
+ */
+function readTargets(
+  policy: Policy,
+  toolName: string,
+  input: Record<string, unknown>,
+): string[] {
+  if (toolName === "Read") return [targetPath(input)];
+  const path = asString(input.path);
+  const searchRoot = resolve(policy.cwd, path || ".");
+  if (toolName === "Glob") {
+    return [path, globBase(asString(input.pattern), searchRoot)];
+  }
+  const pieces = asString(input.glob)
+    .split(/[\s,]+/)
+    .map((piece) => piece.replace(/^!/, ""))
+    .filter((piece) => /^(\/|~)|(^|\/)\.\.(\/|$)/.test(piece));
+  return [path, ...pieces.map((piece) => globBase(piece, searchRoot))];
+}
 
 /**
  * Why a read needs a human's approval: it reaches outside --cwd and the
@@ -237,19 +277,21 @@ export function approvalReason(
   input: Record<string, unknown>,
   transcriptPath?: string,
 ): string | null {
-  if (!READ_TOOLS.includes(toolName)) return null;
-  const path =
-    toolName === "Read" ? targetPath(input) : asString(input.path);
+  if (!isOneOf(READ_TOOLS, toolName)) return null;
   // Large tool results are saved under <transcript dir>/<session id>/; only
   // that session directory is exempt, never the transcript's parent.
+  // (Assumed from observed runs; unverified against SDK 0.3.283's docs.)
   const roots = transcriptPath
     ? [
         ...policy.readRoots,
         join(dirname(transcriptPath), basename(transcriptPath, ".jsonl")),
       ]
     : policy.readRoots;
-  if (resolvesInside(policy.cwd, roots, path)) return null;
-  return `${path || "That path"} is outside the project. Reading outside --cwd needs the human operator's approval${policy.interactive ? "" : ', which an unattended (--yes) run cannot give; allow the directory with --allow "Read(//abs/dir/**)" or ask the operator'}.`;
+  const outside = readTargets(policy, toolName, input).find(
+    (path) => !resolvesInside(policy.cwd, roots, path),
+  );
+  if (outside === undefined) return null;
+  return `${outside || "That path"} is outside the project. Reading outside --cwd needs the human operator's approval${policy.interactive ? "" : ', which an unattended (--yes) run cannot give; allow the directory with --allow "Read(//abs/dir/**)" or ask the operator'}.`;
 }
 
 /**
@@ -347,6 +389,29 @@ export function createSafetyHooks(
   };
 }
 
+/** A search as the approval prompt shows it: the pattern, where it looks, and its glob. */
+function searchShown(
+  policy: Policy,
+  toolName: "Grep" | "Glob",
+  input: Record<string, unknown>,
+): string {
+  const pattern = asString(input.pattern);
+  const path = asString(input.path);
+  const glob = asString(input.glob);
+  const base =
+    toolName === "Glob"
+      ? globBase(pattern, resolve(policy.cwd, path || "."))
+      : undefined;
+  return [
+    pattern,
+    path && `in ${path}`,
+    glob && `(glob ${glob})`,
+    base !== undefined && base !== policy.cwd && `(from ${base})`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 /** Asks the human a question and resolves with the answer line. */
 export type Ask = (question: string) => Promise<string>;
 
@@ -408,10 +473,12 @@ export function createPermissionGate(
     const shown =
       toolName === "Bash"
         ? asString(input.command)
-        : targetPath(input) ||
-          asString(input.url) ||
-          asString(input.pattern) ||
-          JSON.stringify(input);
+        : toolName === "Grep" || toolName === "Glob"
+          ? searchShown(policy, toolName, input)
+          : targetPath(input) ||
+            asString(input.url) ||
+            asString(input.pattern) ||
+            JSON.stringify(input);
     const detail = shown.replace(/[\x00-\x1f\x7f]+/g, " ").slice(0, 2000);
 
     let answer: string;
