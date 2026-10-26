@@ -1,0 +1,18 @@
+[
+  { "linkType": "role-registry", "paths": ["src/team.ts", "src/agents/*/index.ts", "src/project-agents.ts"], "counterparts": ["src/orchestrator/prompt.md", "src/agents/*/prompt.md", "src/team.test.ts", "src/prompts.ts"], "classes": [7, 8] },
+  { "linkType": "prompt-sections", "paths": ["src/**/prompt.md", "src/prompts.ts"], "counterparts": ["src/team.test.ts", "src/prompts.ts", "src/orchestrator/index.ts"], "classes": [7, 8] },
+  { "linkType": "placeholders", "paths": ["src/orchestrator/prompt.md", "src/orchestrator/index.ts", "src/prompts.ts"], "counterparts": ["src/orchestrator/prompt.md", "src/orchestrator/index.ts", "src/prompts.ts"], "classes": [8] },
+  { "linkType": "plugin-skills", "paths": ["plugin/**", "src/agents/shared.ts", "src/agents/code-reviewer/index.ts"], "counterparts": ["plugin/**", "src/agents/shared.ts", "src/agents/*/index.ts", "src/team.test.ts"], "classes": [7, 8] },
+  { "linkType": "tool-names", "paths": ["src/tools.ts", "src/agents/shared.ts", "src/permissions.ts", "src/allowlist.ts"], "counterparts": ["src/tools.ts", "src/permissions.ts", "src/agents/shared.ts", "src/allowlist.ts"], "classes": [4, 5, 9] },
+  { "linkType": "ledger-text", "paths": ["src/ledger.ts", "src/outcome.ts", "src/orchestrator/summary.ts"], "counterparts": ["src/orchestrator/prompt.md", "src/outcome.ts", "src/team.test.ts", "src/index.ts"], "classes": [6, 7] },
+  { "linkType": "report-status", "paths": ["src/agents/team/prompt.md"], "counterparts": ["src/orchestrator/prompt.md"], "classes": [7] },
+  { "linkType": "protected-paths", "paths": ["src/permissions/paths.ts", "src/permissions/shell.ts", "src/permissions/globs.ts"], "counterparts": ["src/permissions/paths.ts", "src/permissions/shell.ts", "src/agents/team/prompt.md", "src/orchestrator/prompt.md", "src/prompts.ts"], "classes": [1, 3, 5, 7] },
+  { "linkType": "secret-families", "paths": ["src/permissions/paths.ts", "src/permissions/shell.ts", "src/permissions/globs.ts", "src/permissions.ts", "src/ledger.ts"], "counterparts": ["src/permissions/paths.ts", "src/permissions/shell.ts", "src/permissions/globs.ts", "src/permissions.ts", "src/ledger.ts"], "classes": [1, 2, 4, 5] },
+  { "linkType": "cli-surface", "paths": ["src/cli.ts", "src/index.ts", "src/outcome.ts"], "counterparts": ["src/cli.ts", "src/index.ts", "src/orchestrator/index.ts", "src/orchestrator/prompt.md", "src/agents/team/prompt.md", "src/cli.test.ts"], "classes": [6, 7, 8] },
+  { "linkType": "allow-rule-syntax", "paths": ["src/allowlist.ts"], "counterparts": ["src/permissions.ts", "src/cli.ts", "src/orchestrator/wiring.test.ts"], "classes": [2, 3, 8, 10] },
+  { "linkType": "sdk-assumptions", "paths": ["package.json", "src/orchestrator/index.ts", "src/project-agents.ts"], "counterparts": ["src/project-agents.ts", "src/orchestrator/index.ts", "src/permissions.ts", "src/ledger.ts", "src/cli.ts"], "classes": [4, 9] },
+  { "linkType": "reserved-names", "paths": ["src/ledger.ts", "src/project-agents.ts"], "counterparts": ["src/ledger.ts", "src/project-agents.ts"], "classes": [6, 8] },
+  { "linkType": "prompt-bytes", "paths": ["src/**/prompt.md", ".prettierrc", ".prettierignore", ".gitattributes"], "counterparts": [".prettierrc", ".prettierignore", ".gitattributes", "src/prompts.ts"], "classes": [7] },
+  { "linkType": "policy-tests", "paths": ["src/permissions.ts", "src/permissions/**", "src/allowlist.ts", "src/permissions*.test.ts", "src/allowlist.test.ts"], "counterparts": ["src/permissions*.test.ts", "src/allowlist.test.ts", "src/permissions/**"], "classes": [1, 2, 3, 4, 10, 12] },
+  { "linkType": "review-config", "paths": [".claude/pr-review/**", ".github/workflows/pr-review.yml", ".github/workflows/pr-review-learn.yml"], "counterparts": [], "classes": [11] }
+]

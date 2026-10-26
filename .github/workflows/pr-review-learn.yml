@@ -1,0 +1,57 @@
+# Feedback learning for the PR reviewer (marcusk639/pr-review-kit). Once a
+# week it reads Marcus's 👍/👎 and `review:` replies on the reviewer's comments
+# and proposes memory changes as ONE learning PR, which he merges, edits or
+# closes. Lessons never merge on their own: memory reaches the reviewer only
+# through that PR. Pin the same kit SHA as pr-review.yml.
+# Needs Settings → Actions → "Allow GitHub Actions to create and approve pull
+# requests" for the propose job's token.
+name: PR Review learning
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: pr-review-learning
+  cancel-in-progress: false
+
+jobs:
+  # Holds the Claude token, never a write token.
+  learn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Learn
+        uses: marcusk639/pr-review-kit/actions/learn@85ab8f92d5115c49a144ea617bf56fcb73122608
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+  # Model-free; the only job with a write token.
+  propose:
+    needs: learn
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Propose
+        uses: marcusk639/pr-review-kit/actions/propose@85ab8f92d5115c49a144ea617bf56fcb73122608

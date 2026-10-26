@@ -1,0 +1,62 @@
+# Repo-aware, advisory PR review (marcusk639/pr-review-kit). It comments only:
+# it never approves, never blocks and is never a required check. The design is
+# docs/specs/pr-reviewer-design.md.
+#
+# The kit is pinned by full commit SHA, the same in every pr-review-kit
+# `uses:` line here and in pr-review-learn.yml; a tag or branch would let the
+# engine change under the pin. Third-party actions are pinned by SHA too.
+# Project config, knowledge and checks come from the PR's base commit
+# (.claude/pr-review/), never from the PR head.
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+    # Only PRs into main. A stacked PR's base is a feature branch an agent
+    # can push to, and the reviewer's rules would come from it (spec §7.1).
+    branches: [main]
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Skip drafts, forks (their runs get no secrets), Dependabot (likewise)
+    # and PRs whose base is not main (a PR retargeted after opening).
+    if: >-
+      ${{ !github.event.pull_request.draft
+      && github.actor != 'dependabot[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.base.ref == 'main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Facts, then the sandboxed model. Gets the Claude token and nothing else.
+      - name: Review
+        id: review
+        uses: marcusk639/pr-review-kit/actions/review@85ab8f92d5115c49a144ea617bf56fcb73122608
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+      # Model-free; the only step with the id key and the advisory token.
+      - name: Publish
+        if: always()
+        uses: marcusk639/pr-review-kit/actions/publish@85ab8f92d5115c49a144ea617bf56fcb73122608
+        with:
+          action_outcome: ${{ steps.review.outputs.outcome }}
+          execution_file: ${{ steps.review.outputs.execution_file }}
+          id_key: ${{ secrets.PR_REVIEW_ID_KEY }}
+          advisory_token: ${{ secrets.SECURITY_ADVISORY_TOKEN }}

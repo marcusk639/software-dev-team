@@ -1,28 +1,32 @@
-# Repo-aware PR reviewer for software-dev-team: design (draft)
+# Repo-aware PR reviewer for software-dev-team: design
 
-**Date:** 2026-10-26 · **Status:** draft for the phase 3 checkpoint · **Owner:** Marcus Klein
+**Date:** 2026-10-26 · **Status:** approved at the phase 3 checkpoint, implemented on `chore/pr-review` (not pushed) · **Owner:** Marcus Klein
 
-The understanding this design rests on is in `docs/reports/pr-reviewer-project-brief.md`. Section numbers in the form "brief §n" point there. The reference design is recovery-platform's `docs/superpowers/specs/2026-10-22-pr-review-agent-design.md` ("RP §n"). The shared engine (`~/dev/pr-review-kit`) is being extracted in parallel and its interface is not settled, so §9 lists what this project needs from it rather than assuming an API.
+The understanding behind this design is in `docs/reports/pr-reviewer-project-brief.md` ("brief §n"). The reference design is recovery-platform's `docs/superpowers/specs/2026-10-22-pr-review-agent-design.md` ("RP §n"). The shared engine is `marcusk639/pr-review-kit` ("kit"). Its `docs/design.md` defines the configuration surface used below. The implementation plan is `docs/plans/pr-reviewer.md`, and the GitHub steps are in `docs/plans/pr-reviewer-runbook.md`.
 
 ## 1. Intent
 
-This repo is a safety harness for autonomous agents. Most of its value is in a pattern-matching policy that has needed four review rounds to close the bypasses its own reviewers found (brief §4, C1–C5). Marcus already runs several local reviewer agents on every PR. A GitHub reviewer adds value only where those local passes are structurally weak:
+This repo is a safety harness for autonomous agents. Most of its value is a pattern-matching policy, and its own reviewers needed four review rounds to close the bypasses they found in it (brief §4, C1–C5). Marcus already runs several local reviewer agents on every PR. A GitHub reviewer adds value only where those local passes are structurally weak:
 
-- **String links that typecheck can't see**: prompts ↔ code ↔ tests ↔ help text ↔ consumers' customization files ↔ SDK behaviour (brief §3, L1–L15).
+- **String links that typecheck can't see.** Prompts, code, tests, help text, consumers' customization files and SDK behaviour all depend on each other by name (brief §3, L1–L15).
 - **Loosenings.** Any change that lets through an input that used to be denied must be named and justified (L15, C10, C12).
 - **PR-text accuracy.** PR bodies here are long and make specific claims: test counts, "verified live", lists of intentional loosenings, merge instructions (C11).
-- **An independent pass on carve-outs** (C2), the class that cost the most rounds.
+- **An independent pass on carve-outs** (C2), the class that cost the most review rounds.
 
-## 2. Decisions this design assumes (Marcus confirms at the checkpoint)
+## 2. Decisions (Marcus, phase 3 checkpoint)
 
-| Decision                 | Proposed                                                                                                                        |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| Effect on merging        | Advisory only. It comments and never approves, blocks or becomes a required check. (Adopted.)                                   |
-| Runtime, auth and model  | The shared engine on `anthropics/claude-code-action@v1`, `CLAUDE_CODE_OAUTH_TOKEN`, Opus. (Adopted. The secret is not set yet.) |
-| Security findings        | Public pointer and private draft advisory. The pointer may name the policy area, never the input (§7.6). (Adapted.)             |
-| Review frequency         | Every push, with no duplicates, using a reduced tier set (§7.5). (Adapted.)                                                     |
-| Trusted feedback authors | `marcusk639` only. He is the sole collaborator, and the repo is public. (Adopted.)                                              |
-
+| Decision                | Choice                                                                                                                                                            |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Effect on merging       | Advisory only. It comments, and never approves, blocks or becomes a required check.                                                                               |
+| Runtime, auth and model | The kit's composite actions on `claude-code-action`, with `CLAUDE_CODE_OAUTH_TOKEN` and Opus. The kit is public and pinned by full SHA.                           |
+| Security findings (Q1)  | Safety-hook bypass findings stay private: a public pointer plus a draft advisory. The pointer may name a fixed policy area, never the input.                      |
+| Stacked PRs (Q2)        | Only PRs whose base is `main` are reviewed. Loading rules from `main` instead is a follow-up (§12), because the action's own `.claude/` restore defeats it today. |
+| CI (Q3)                 | A minimal `pnpm typecheck && pnpm test` workflow is separate follow-up work.                                                                                      |
+| Merge style (Q4)        | Merge commits stay, so commit subjects are what reach `main`.                                                                                                     |
+| Lessons (Q5)            | No auto-merge. Every lesson comes in the weekly learning PR.                                                                                                      |
+| Renames (Q6)            | A role or section rename is Medium, since no consumers of `.claude/dev-team/` are known.                                                                          |
+| Inline cap (Q7)         | 5.                                                                                                                                                                |
+| Feedback                | Only the repo owner's (`marcusk639`) reactions count, plus replies whose first non-quoted line starts with `review:`. Edited comments are ignored.                |
 ## 3. Goals
 
 - **G1. Cross-artifact break detection.** For each link type the diff touches (L1–L15), open the other side and report concrete drift, citing both sides.
@@ -51,196 +55,201 @@ All of RP §5 applies. These matter most here:
 ## 6. Constraints
 
 - The repo is public. `marcusk639` is the only collaborator (brief §7).
-- There is no `.claude/settings.json`, no `.mcp.json` and no `CLAUDE.md` today. The workflow still passes `disableAllHooks` and `--strict-mcp-config`, so adding any of them later can't change CI behaviour.
-- PRs often target a non-default base. PR #2 was stacked on #1, and PR #3 exists because of it. Knowledge loaded from "the PR's base" would then come from a feature branch an agent can push to (§7.1, open question Q2).
-- Merge commits, not squash. Commit subjects reach `main` and the PR title doesn't, so the reviewer checks commit subjects (`OUT/commits.txt`) against the conventional format instead of the PR title.
-- There is no file-size rule, so recovery-platform's 300-line check is dropped.
-- Node scripts in the reviewer use built-ins only. The repo's own toolchain (pnpm, tsx, TypeScript 7) is never installed in the review job.
+- There is no `.claude/settings.json`, `.mcp.json`, root `CLAUDE.md` or `AGENTS.md` today. A PR could add any of them, so the engine's review action must neutralize PR-head agent config, disable hooks, pass `--strict-mcp-config` and `--setting-sources user`, and deny `Skill` and reads of `.claude-pr/`. These are mandatory engine properties (§9).
+- PRs land as merge commits, not squashes. Commit subjects reach `main` and the PR title doesn't, so the reviewer checks commit subjects (`OUT/commits.txt`) and the kit's `titleScope` check is off.
+- There is no file-size rule, so the kit's `newFileSize` check is off.
+- The reviewer's scripts use Node built-ins only. The repo's own toolchain (pnpm, tsx, TypeScript 7) is never installed in the review job, and no project code runs there.
 
 ## 7. Design
 
-### 7.1 Workflow
+### 7.1 Workflows
 
-The engine's workflow, as a thin caller in `.github/workflows/pr-review.yml` pinned to an engine commit SHA. Triggers, concurrency, permissions, the same-repo/draft/bot guards, the facts → model → publish split, and a publish step that holds secrets and never runs the model are all adopted from RP §7.1. Local deltas:
+- **`.github/workflows/pr-review.yml`** is the kit's example workflow with these local changes:
+  - `on.pull_request.branches: [main]`, plus a `github.event.pull_request.base.ref == 'main'` job guard, which covers a PR retargeted after it was opened (Q2)
+  - `actions/checkout` pinned to the `v4.4.0` commit SHA
+  - the kit's `review` and `publish` actions pinned to one full SHA
+  - a 30-minute timeout
 
-- **Knowledge source.** Load `.claude/pr-review/` from the head of the default branch (`main`), not from the PR base, whenever the base isn't `main`. A stacked PR must not be judged by rules edited on its parent branch. This needs an engine option (§9, `trustRef`). If Marcus prefers it, the alternative is to skip PRs whose base isn't `main` (Q2).
-- **Skip prefixes.** None today (the repo has no `e2e-fix/*`-style agent branches).
-- **Timeout.** 30 minutes.
+  Everything else is adopted from RP §7.1 through the kit:
+  - triggers, concurrency and permissions
+  - the same-repo, draft and Dependabot guards
+  - facts, then the model, then a model-free publish
+  - secrets passed only to the step that needs them
 
-### 7.2 Knowledge files (`.claude/pr-review/`, base-controlled)
+- **`.github/workflows/pr-review-learn.yml`** is the kit's learning workflow, weekly plus manual dispatch, with the same SHA pins. The `learn` job holds the Claude token and no write token. The `propose` job holds the write token and no model. Lessons reach the reviewer only when Marcus merges the learning PR.
 
-| File                 | Contents                                                                                                                                                                                                                   |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `REVIEW.addendum.md` | Repo-specific procedure on top of the engine's `REVIEW.md`: the cross-artifact pass, the loosening audit, operator promises instead of features, treating behavioural markdown as code, and the security boundary in §7.6. |
-| `contract-map.md`    | One file is enough at this size. A `## <linkType>` section for each of L1–L15, both directions, with counterpart paths. Patterns only.                                                                                     |
-| `checklist.md`       | C1–C12 with what to look for, trigger paths and historical evidence (commits and PRs only).                                                                                                                                |
-| `conventions.md`     | Brief §5, which in this repo stands in for the `CLAUDE.md` it doesn't have.                                                                                                                                                |
-| `false-positives.md` | Brief §6, seeded with the rulings in brief §9, each with its source.                                                                                                                                                       |
-| `routing.json`       | Engine schema. Paths → link types → classes → counterparts (§7.3).                                                                                                                                                         |
-| `learned.md`         | Learned memory, seeded empty (brief §9). The engine's learning workflow proposes edits to this file and to the four above.                                                                                                 |
-| `checks/*.mjs`       | Project fact modules (§7.4), if the engine's extension point allows them.                                                                                                                                                  |
+### 7.2 Project files (`.claude/pr-review/`, read from the base commit)
 
-The map is guidance, not truth, and every entry is re-verified against `main` when it is written (adopted from RP §7.2). The "map maintenance" note is adopted too. New link types appear here as the harness grows.
+| File                                                                   | Contents                                                                                                                                                                                                                   |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config.json`                                                          | The kit config: public with the `advisory` channel, classes 1–12 (1–5 security, 11 `always` and `light`), tiers, `inline.max: 5`, checks, `trust.feedbackAuthors: ["marcusk639"]`.                                         |
+| `REVIEW.md`                                                            | The addendum: operator promises instead of features, the cross-artifact pass, behavioural markdown as code, the loosening audit, the security boundary and its area vocabulary, large-PR priorities, severity calibration. |
+| `routing.json`                                                         | 16 link types: L1–L15 from brief §3 plus `review-config`. Each maps paths to counterparts and classes.                                                                                                                     |
+| `checklist.md`                                                         | Classes 1–12 (brief C1–C12): what to look for, trigger paths, evidence as commits and PRs only.                                                                                                                            |
+| `contract-map.md`                                                      | One `## <linkType>` section per routing entry. Patterns and counterpart paths only.                                                                                                                                        |
+| `conventions.md`, `false-positives.md`                                 | Brief §5 and §6. `false-positives.md` is seeded with the rulings in brief §9, each with its source.                                                                                                                        |
+| `learned-lessons.md`, `learned/lessons.json`, `learned/precision.json` | Learned memory, seeded empty: no reviewer corrections exist on GitHub (brief §9).                                                                                                                                          |
+| `checks/policy.mjs`, `checks/contracts.mjs`, `checks/lib/`             | Project checks (§7.4), with tests under `checks/test/`.                                                                                                                                                                    |
+
+Every map entry was re-verified against `main` when written, and the kit's `validate` checks that every backticked path exists. The map is guidance, not truth, and adding "map maintenance" notes is part of the procedure (adopted from RP §7.2).
 
 ### 7.3 Routing
 
-| Paths touched                                                    | Link types                       | Classes              |
-| ---------------------------------------------------------------- | -------------------------------- | -------------------- |
-| `src/permissions.ts`, `src/permissions/**`                       | L5, L8, L9, L15                  | C1–C5, C10, C12      |
-| `src/allowlist.ts`                                               | L5, L11, L15                     | C3, C5, C8, C10, C12 |
-| `src/tools.ts`, `src/agents/shared.ts`, `src/agents/*/index.ts`  | L1, L4, L5                       | C5, C7, C8           |
-| `src/team.ts`, `src/project-agents.ts`                           | L1, L13                          | C8, C9               |
-| `src/**/prompt.md`, `plugin/**`                                  | L1, L2, L3, L6, L7, L8, L10, L14 | C7                   |
-| `src/prompts.ts`                                                 | L2, L3, L14                      | C8                   |
-| `src/ledger.ts`, `src/outcome.ts`, `src/orchestrator/summary.ts` | L6, L10, L13                     | C6                   |
-| `src/orchestrator/index.ts`                                      | L3, L5, L12                      | C4, C6, C9           |
-| `src/cli.ts`, `src/index.ts`                                     | L10, L11                         | C7, C8               |
-| `package.json`, `pnpm-lock.yaml`                                 | L12                              | C9                   |
-| `src/**/*.test.ts`                                               | L15                              | C10, C12             |
-| `.prettierrc`, `.prettierignore`, `.gitattributes`               | L14                              | C7                   |
-| `docs/**`                                                        | none                             | C11 only             |
-| any                                                              | none                             | C11 always           |
+`routing.json` holds the authoritative table. In summary:
 
-Security classes for §7.6 are C1–C5 always, plus C9 when the assumption is one a safety rule depends on.
+| Paths touched                                                    | Link types                                                                | Classes                  |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------ |
+| `src/permissions.ts`, `src/permissions/**`, policy test suites   | policy-tests, protected-paths, secret-families, tool-names                | 1–5, 10, 12              |
+| `src/allowlist.ts`                                               | allow-rule-syntax, tool-names, policy-tests                               | 2, 3, 4, 5, 8, 9, 10, 12 |
+| `src/tools.ts`, `src/agents/**/index.ts`, `src/agents/shared.ts` | tool-names, role-registry, plugin-skills                                  | 4, 5, 7, 8, 9            |
+| `src/team.ts`, `src/project-agents.ts`                           | role-registry, sdk-assumptions, reserved-names                            | 4, 6, 7, 8, 9            |
+| `src/**/prompt.md`, `plugin/**`, `src/prompts.ts`                | prompt-sections, placeholders, prompt-bytes, report-status, plugin-skills | 7, 8                     |
+| `src/ledger.ts`, `src/outcome.ts`, `src/orchestrator/summary.ts` | ledger-text, cli-surface, reserved-names, secret-families                 | 1, 2, 4, 5, 6, 7, 8      |
+| `src/cli.ts`, `src/index.ts`                                     | cli-surface                                                               | 6, 7, 8                  |
+| `package.json`, `src/orchestrator/index.ts`                      | sdk-assumptions, placeholders                                             | 4, 8, 9                  |
+| `.prettierrc`, `.prettierignore`, `.gitattributes`               | prompt-bytes                                                              | 7                        |
+| `.claude/pr-review/**`, the two workflows                        | review-config                                                             | 11 (and self-edit High)  |
+| anything                                                         |                                                                           | 11 (always)              |
+
+Classes 1–5 are security classes. Class 9 is security-relevant when a safety rule depends on the assumption (addendum).
 
 ### 7.4 Deterministic facts
 
-The engine's generic facts are adopted: changed files by area, link types triggered, secret scan of added lines, commit list, and size. These are project-specific hints the reviewer must confirm, never verdicts:
+The kit's generic facts are adopted: changed files, packages, link types, the secret scan, self-edit and engine pin. PII-in-logs, new-file size, title scope and verify-diff are off. The project checks are hints the model must confirm, never verdicts:
 
-1. **Policy-test movement (L15).** For `src/permissions*.test.ts` and `src/allowlist.test.ts`, list string literals removed from a `denies(`-style case or deny list and added under `allows(` or an accepted list, plus the counts of removed and added deny cases. This is the loosening signal G3 needs.
-2. **Role names (L1).** If `AGENTS` keys in `src/team.ts` change, list every prompt file that names an old or new key.
-3. **Prompt sections (L2).** Section tags added, removed or renamed in any `prompt.md` are marked "consumer-breaking".
-4. **SDK bump (L12).** If the SDK version in `package.json` changes, list the files that carry `0.3.283` or "unverified" comments.
-5. **Tool union (L5).** Changes to `ToolName`, `WRITE_TOOLS`, `MANAGER_ALLOWED` or role tool sets.
-6. **New exemptions (C2).** Added lines in `src/permissions/**` that look like carve-outs (`return null` in a deny function, `allow`/`exempt`/`skip`/`strip` identifiers, new entries in `*_ONLY`/`SAFE_*`/`NO_OP_*` sets). This is a hint for where to look first, and its noise level gets checked in the dry run.
-7. **Behavioural markdown.** `src/**/prompt.md` and `plugin/**/SKILL.md` count as code for tiering, and the diff of them is surfaced in full.
+| Check              | Module                 | What it reports                                                                                                                                                                                                                                |
+| ------------------ | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `policy-loosening` | `checks/policy.mjs`    | Compares the `denies`, `allows`, `check` and accepted-false-positive tables of every policy test suite at the merge base and at the head, across files. Reports deny→allow moves, deny cases removed with no replacement, and new allow cases. |
+| `carve-outs`       | `checks/policy.mjs`    | Added lines in the policy that look like an exemption (`return null`, `exempt`, `strip`, `skip`, `except`, `bypass`, `SAFE_`/`NO_OP_` names), one fact per file.                                                                               |
+| `role-names`       | `checks/contracts.mjs` | `AGENTS` keys removed (and the prompts that still name them) or added (and named in no prompt).                                                                                                                                                |
+| `prompt-sections`  | `checks/contracts.mjs` | Section tags removed (marked consumer-breaking) or added in a `prompt.md`.                                                                                                                                                                     |
+| `sdk-pin`          | `checks/contracts.mjs` | A change to the SDK version, and the files that still name the old one.                                                                                                                                                                        |
+| `tool-lists`       | `checks/contracts.mjs` | Membership changes in `ToolName` and the tool lists in `src/tools.ts`, `src/agents/shared.ts` and `src/permissions.ts`.                                                                                                                        |
 
-**Secret scan.** Allow-list the fixture values in `src/**/*.test.ts` (`sk-ant-test-…`, `ghp_0123456789ab`) so they don't drown the facts file, but keep scanning everything else. Drop recovery-platform's PII-in-log heuristics, since there is no PII domain here.
+**Secret-scan fixtures.** The kit has no fixture allow-list, so the `sk-ant-test-…` values in the policy tests will raise `secrets` facts. `false-positives.md` tells the model they are fixtures. The redaction still applies to anything posted.
 
 ### 7.5 Tiers
 
-- **Adopted:** `none` (empty increment), `full` (first run, rewritten history, or no prior state), `incremental` (the increment's hunks plus the counterparts of the link types it touches).
-- **Dropped:** `light` (docs-only). Here the "docs" that matter are prompts, and the rest of `docs/` is snapshot reports. A `docs/**`-only increment gets `incremental` with a low cap, which is cheap enough.
-- **Dropped:** `base-drift`. PRs live for hours, there is one author, and the string links all point inside this repo, so `main` changing a counterpart under an open PR is rare. A merge from `main` is reviewed as `incremental`.
-- **Turn caps:** `full` 60 and `incremental` 25. Calibrate on the replay set, since PR #4 (4k lines, 41 files) is the worst historical case.
-- **Large-PR rule.** Count lines without `src/**/*.test.ts` and `pnpm-lock.yaml`, since tests are about half of every large PR. Over the threshold, prioritise `src/permissions/**`, `src/allowlist.ts` and the L15 facts.
+The kit's tiers are kept, with lower caps: `full` 60, `incremental-new-links` 45, `incremental` 25, `light` 10, `base-drift` 10. The draft dropped `light` and `base-drift`. The kit can't disable single tiers, and neither tier causes harm:
+
+- A prompt or skill edit is never `light`, because those paths trigger link types and light applies only to an increment with no link types.
+- `lightFiles` is narrowed to `docs/**`, images, `.txt` and the lockfile.
+
+The large-PR threshold is 60 files or 6,000 lines. The kit counts test lines too, so the addendum orders the reading for large PRs: facts first, then policy sources, then wiring and the ledger, then prompts, with tests last.
 
 ### 7.6 Security findings
 
-Adopted: the public pointer, private draft advisories, a model with no advisory token, and opaque ledger IDs keyed with `PR_REVIEW_ID_KEY` (RP §7.8–7.9). Draft advisories work on public repos.
+Adopted from RP §7.8–7.9: the public pointer, draft repository advisories (available on public repos), a model with no advisory token, and opaque ledger IDs keyed with `PR_REVIEW_ID_KEY`.
 
-Adapted for a repo whose subject is security:
+What counts as security-relevant here:
 
-- **Security-relevant here** means C1–C5. It also means anything describing an input or sequence that gets past the safety hook, the delegation guard or read confinement; a secret-exposure path; or a fail-open.
-- **Pointer granularity.** The module is public and nearly every PR touches it, so a pointer that only says "security-relevant issue (High)" tells Marcus nothing. The pointer may name the policy area from a fixed list (`shell rules`, `git rules`, `path confinement`, `secret families`, `delegation guard`, `allow rules`, `hook wiring`). It never names a file, a line, a mechanism or an input.
-- **Loosenings that the PR text declares** (G3) are not security findings by default. Only an undeclared loosening of a deny rule is.
-- **Volume check.** If most findings on a PR are security pointers, the summary is mostly pointers. The trial measures whether this is useful. If it isn't, Q1 below is the lever.
+- classes 1–5
+- any input or sequence that the hook, the delegation guard or read confinement would let through
+- a path that exposes a secret value
+- a fail-open
+- an undeclared loosening of a deny rule
+
+The pointer's `package` is `src`, `plugin` or `repo`. Its `area` must come from a fixed list: `shell rules`, `git rules`, `path confinement`, `secret families`, `delegation guard`, `allow rules`, `hook wiring`, `ledger`. A loosening that the PR declares, with a reason, is not a security finding by itself, and the `## Loosenings` table names only its rule family.
 
 ### 7.7 Output
 
-Adopted from RP §7.7: one sticky summary with a hidden ledger, inline comments only for non-security Critical/High findings with fingerprints, publish-side guards, redaction, and "partial/incomplete" is never "No issues found". Local deltas:
+Adopted from RP §7.7 through the kit: the sticky summary with its hidden ledger, fingerprinted inline comments, publish-side guards, redaction, and "partial" or "incomplete" never shown as clean. Local changes:
 
-- **Summary sections.** "Promises touched" replaces "Features touched", "Cross-artifact impact" replaces "Cross-package impact", and a "Loosenings" table (declared / undeclared / unclear) is added.
-- **Inline cap: 5** rather than 10. These PRs arrive already reviewed several times, and noise is the main failure.
-- **No PR-title convention check.** Merge commits mean commit subjects matter instead (§6).
+- `## Promises touched` replaces "Features touched".
+- `## Cross-artifact impact` replaces "Cross-package impact".
+- `## Loosenings` is added (change, declared, where).
+- The inline cap is 5.
 
 ### 7.8 Learning from Marcus's feedback
 
-Adopted wholesale from the engine (rollout brief `<feedback_learning>`). Settings for this repo:
+Adopted from the kit (kit design §5), with these settings:
 
-- **Trusted authors:** `marcusk639`. Everyone else's reactions and replies are ignored, including the bot's own.
-- **Lesson destinations:** `false-positives.md`, `conventions.md`, `checklist.md` and `contract-map.md` first, then `learned.md`.
-- **Protected classes:** C1–C5. A 👎 never suppresses them, and any lesson that narrows them is flagged in the learning PR for Marcus's decision. Feedback on security findings arrives through the advisory, and only a non-revealing pattern may become memory.
-- **Merge policy:** every lesson goes through the learning PR. No automatic merge is proposed for this repo, because most of its classes are security classes (Q5).
-- **Seed:** `learned.md` starts empty. Rulings already made go into `false-positives.md` (brief §9).
+- **Trusted:** `marcusk639` only. That means his 👍/👎 and his replies that start with `review:`. Edited comments, other accounts and bots don't count.
+- **Destinations:** lessons go into the managed blocks of `false-positives.md`, `conventions.md`, `checklist.md` and `contract-map.md` first, then `learned-lessons.md`.
+- **Protected:** classes 1–5 are security classes, so a 👎 never demotes them, and any lesson that narrows them is flagged for Marcus's decision.
+- **Security feedback:** feedback on security findings lives in the advisories and becomes memory only as a pattern Marcus writes himself.
+- **Merge:** no auto-merge. There is one weekly learning PR, with no author or branch exemption from the self-edit finding, and no PAT or dispatched CI on it.
+- **Formatting:** the repo has no formatter or doc checks of its own (Prettier runs only through Marcus's local hook), so the learn job has nothing project-specific to run beyond the kit's own validation.
+- **Seed:** learned memory starts empty, and the rulings already made are in `false-positives.md`.
 
 ### 7.9 Delivery order
 
-Adopted from RP §7.10. Skeleton PR, merge, secrets (`CLAUDE_CODE_OAUTH_TOKEN`, `PR_REVIEW_ID_KEY`, `SECURITY_ADVISORY_TOKEN`), then a test PR, replay PRs, a feedback round trip, and a trial. Replay candidates, built on throwaway branches with clearly labelled planted bugs, never real bypasses:
+See `docs/plans/pr-reviewer-runbook.md`. The order is: skeleton PR, merge, secrets and settings, test PR, replay PRs with planted, clearly labelled bugs, a feedback round trip, then a trial. This follows RP §7.10, since the engine and knowledge must be on `main` before they review anything.
 
-1. A role renamed in `src/team.ts`, with `src/orchestrator/prompt.md` unchanged (L1).
-2. A section tag renamed in a specialist's `prompt.md` (L2, consumer-breaking).
-3. A deny case moved to `allows(` with no mention in the PR body (L15, G3). This is the planted security replay, judged on the pointer revealing nothing beyond area and severity.
-4. A new ledger outcome word, with the orchestrator prompt unchanged (L6).
-5. An SDK version bump with no re-verification note (L12).
-6. A PR body claiming "N tests pass" that doesn't match the diff, or "verified live" with no evidence (C11).
+## 8. Acceptance criteria (from RP §8, adapted)
 
-**Historical dry runs** before any GitHub step: facts plus publish `--dry-run` on `747b8a6...09f238e` (PR #1, L1/L14), on PR #5 (`9fe2d03...74ef64e`, the L15 loosenings it declares, which should come out "declared"), and on `a945089` alone (C2, the carve-out that later had to be withdrawn).
+1. The skeleton posts with zero permission denials.
+2. The replay set (runbook) is flagged with the correct other side.
+3. A clean PR, such as a docs-only change under `docs/prompts/`, produces no Critical or High findings.
+4. Hooks, MCP servers and PR-head agent config demonstrably don't load.
+5. Forks and drafts are skipped, and so are PRs whose base isn't `main`.
+6. A run on a PR the size of #4 (4k lines, 41 files) finishes within its caps, and the observed turns and duration are reported.
+7. Incremental runs: a fix push and a docs push pick the expected tiers, with no re-posts.
+8. A planted security finding leaks nothing beyond severity, package and area, anywhere public.
+9. The feedback round trip changes behaviour on the next PR.
+10. Trial: Marcus reacts to every finding for two weeks or ten PRs, whichever is first. The target is at least 70% 👍 and no wrong Critical or High finding.
 
-## 8. Acceptance criteria (applicable from RP §8)
+## 9. What the engine must provide
 
-1. The skeleton posts with zero permission denials (RP §8.1).
-2. The replay set in §7.9 is flagged with the correct other side (RP §8.2, adapted).
-3. A clean PR, such as a docs-only change to `docs/prompts/`, produces no Critical/High findings (RP §8.3).
-4. Hooks and MCP servers don't run (RP §8.4). This is vacuous today, but stays a check.
-5. Forks and drafts are skipped, and a PR with a non-`main` base follows Q2 (RP §8.5, adapted).
-6. A run on a PR the size of #4 finishes within its caps, and turns and duration are reported (RP §8.6).
-7. Incremental runs: two pushes (a fix and a docs change) pick the expected tiers with no re-posts. Base-drift is dropped (RP §8.7, adapted).
-8. A planted security finding leaks nothing beyond severity and area anywhere public (RP §8.8).
-9. The feedback round trip changes behaviour on the next PR (new).
-10. Trial: Marcus reacts to every finding for two weeks or ten PRs, whichever comes first, given the low volume. The target is at least 70% 👍 and no wrong Critical/High (RP §8.9, adapted).
+Mandatory security properties, inside the kit's actions. They were requested on 2026-10-26 and are not in `85ab8f9`:
 
-## 9. What this project needs from the shared engine
+- `--setting-sources user`
+- `Skill` and `Read(./.claude-pr/**)` disallowed
+- a neutralize-PR-head step (root `CLAUDE.md`/`AGENTS.md`, `.ignore`/`.rgignore`)
+- third-party actions pinned by SHA
+- one trust SHA for facts, the model and publish
+- knowledge safe from the action's `.claude/` restore
+- `validate` checks for these properties
 
-Configuration points:
+Nice to have:
 
-- **`trustRef`**: load knowledge and project checks from the default branch head rather than the PR base. Alternatively, a `baseBranches` filter that skips PRs not targeting `main`.
-- **Routing:** project-owned `routing.json` (paths → link types → classes → counterparts), plus a per-class `security: true` flag.
-- **Security area vocabulary:** a fixed list of area names the pointer may use (§7.6).
-- **Tiers:** enable or disable each tier, per-tier turn caps, `behaviouralDocs` globs that are never docs-only, and `sizeExclude` globs for the large-PR threshold.
-- **Inline:** cap and minimum severity.
-- **Secret scan:** extra patterns plus a fixture allow-list (path glob and value pattern). PII heuristics on or off.
-- **Commit convention check:** commit subjects or PR title, with the regex as configuration.
-- **Self-edit paths:** the workflow file and `.claude/pr-review/**`.
-- **Skip rules:** drafts, forks, bots and branch prefixes.
-- **Learning:** trusted authors, protected classes, lesson destination files, schedule, and auto-merge policy.
-- **Visibility:** `public`, which drives redaction strictness and the private channel.
-- **Model and limits:** model ID, job timeout, and a `--dry-run` publish mode.
-
-Extension hooks:
-
-- **Project fact modules:** `.claude/pr-review/checks/*.mjs`, loaded from the trusted ref, each exporting a function that takes the diff, the changed files and a read-only file accessor and returns fact lines. They are limited to Node built-ins, and a throw becomes "pre-check unavailable" (RP §7.4).
-- **Procedure addendum:** the engine's `REVIEW.md` includes a project `REVIEW.addendum.md` and the project's knowledge file list. The addendum can rename summary sections (Promises touched, Cross-artifact impact) and add one (Loosenings).
-- **Extra summary section** rendered from a project fact, the Loosenings table, if rendering is engine-owned.
+- a secret-scan fixture allow-list
+- a test-excluding size measure for `largePr`
+- per-tier disable
+- `baseBranches` as config (the workflow filter does the job today)
 
 ## 10. Adopted, adapted, dropped
 
-| recovery-platform element                                      | Here          | Why                                                                                                                                  |
-| -------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Advisory only, never blocking                                  | Adopted       | Same reason. Marcus weighs findings.                                                                                                 |
-| Base-branch knowledge and scripts                              | **Adapted**   | Default-branch head instead of PR base, because stacked PRs are normal here (#1→#2→#3).                                              |
-| Sandboxed model, model-free publish                            | Adopted       | It reads untrusted PR text in a public repo.                                                                                         |
-| `disableAllHooks`, `--strict-mcp-config`                       | Adopted       | Vacuous today. It keeps behaviour stable if the repo later adds `.claude/` settings.                                                 |
-| Cross-package pass and contract maps                           | **Adapted**   | Becomes a cross-artifact pass over string links (L1–L15). Imports are typechecked, but prompts, tests, help text and the SDK aren't. |
-| Feature-impact pass                                            | **Adapted**   | Operator promises (brief §1). The project has no end-user features.                                                                  |
-| 14-class checklist                                             | **Replaced**  | With C1–C12 mined from this repo's fix commits.                                                                                      |
-| Firestore, callable, region and index checks; `verify-diff.sh` | Dropped       | They don't exist here.                                                                                                               |
-| 300-line rule                                                  | Dropped       | No such rule in this repo.                                                                                                           |
-| PR-title conventional-commit check                             | **Adapted**   | Commit subjects, because PRs land as merge commits.                                                                                  |
-| PII-in-log heuristics                                          | Dropped       | No PII domain.                                                                                                                       |
-| Secret scan                                                    | **Adapted**   | With a fixture allow-list for test credentials.                                                                                      |
-| Tiers: none/full/incremental                                   | Adopted       | Every push gets reviewed without duplicates.                                                                                         |
-| Tiers: light, base-drift                                       | Dropped       | `light` would misclassify prompt edits. Base drift is rare with one author and short-lived PRs.                                      |
-| Ledger, fingerprints, sticky summary                           | Adopted       | Engine-owned.                                                                                                                        |
-| Inline cap 10                                                  | **Adapted**   | 5, because PRs arrive pre-reviewed.                                                                                                  |
-| Public pointer and draft advisory                              | **Adapted**   | Kept, and the pointer may name a fixed policy area, because nearly every finding is in one public module.                            |
-| Self-edit High finding                                         | Adopted       | Same gap: `pull_request` runs the PR's own workflow file.                                                                            |
-| `e2e-fix/*` skip                                               | Dropped       | No such branches.                                                                                                                    |
-| Replay set and two-week trial                                  | **Adapted**   | Repo-specific replays (§7.9). The trial is bounded by PR count as well as time, given the low volume.                                |
-| Feedback learning                                              | Adopted (new) | Trusted is Marcus only. C1–C5 are protected. No auto-merge.                                                                          |
+| recovery-platform element                                      | Here                      | Why                                                                                                |
+| -------------------------------------------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------- |
+| Advisory only, never blocking                                  | Adopted                   | Marcus weighs the findings.                                                                        |
+| Base-branch knowledge and scripts                              | **Adapted**               | Kept, and PRs whose base isn't `main` are skipped, because stacked PRs are normal here (#1→#2→#3). |
+| Sandboxed model, model-free publish                            | Adopted                   | It reads untrusted PR text in a public repo.                                                       |
+| Hooks off, strict MCP config                                   | Adopted, and strengthened | Plus user-only setting sources and PR-head agent-config neutralization (kit).                      |
+| Cross-package pass and contract maps                           | **Adapted**               | A cross-artifact pass over the string links L1–L15.                                                |
+| Feature-impact pass                                            | **Adapted**               | Operator promises. There are no end-user features.                                                 |
+| The 14-class checklist                                         | **Replaced**              | Classes 1–12, mined from this repo.                                                                |
+| Firestore, callable, region and index checks; `verify-diff.sh` | Dropped                   | They don't exist here. The project checks in §7.4 replace them.                                    |
+| 300-line rule, PII-in-logs, title scope                        | Dropped                   | No size rule, no PII domain, and merge commits.                                                    |
+| Secret scan                                                    | Adopted                   | Fixture false positives are handled in `false-positives.md`.                                       |
+| Tiers                                                          | **Adapted**               | All kept, with lower caps and narrowed `lightFiles`.                                               |
+| Ledger, fingerprints, sticky summary                           | Adopted                   | Kit-owned.                                                                                         |
+| Inline cap of 10                                               | **Adapted**               | 5, because PRs arrive already reviewed.                                                            |
+| Public pointer and draft advisory                              | **Adapted**               | Kept, with a fixed area vocabulary.                                                                |
+| Self-edit High finding                                         | Adopted                   | `pull_request` runs the PR's own workflow file. It applies to the learning PR too.                 |
+| `e2e-fix/*` skip                                               | Dropped                   | There are no such branches.                                                                        |
+| Replay set and two-week trial                                  | **Adapted**               | Repo-specific replays, and the trial is also bounded by PR count.                                  |
+| Feedback learning                                              | Adopted (new)             | Owner only, `review:` replies, no auto-merge.                                                      |
 
-## 11. Open questions for Marcus
+## 11. Local verification (2026-10-26)
 
-1. **Q1. Public detail for safety-hook findings.** PR bodies already list known-gap categories publicly (PR #5). Should the reviewer keep bypass findings private, as designed, or post them publicly like the PR bodies do? Recommendation: private, because a PR body describes gaps the author chose to accept, while a reviewer finding may be an unaccepted, working bypass.
-2. **Q2. Stacked PRs.** Should knowledge load from `main`'s head for PRs with a non-`main` base, as designed, or should those PRs be skipped?
-3. **Q3. CI.** Should a minimal `pnpm typecheck && pnpm test` workflow be added as separate work? Without it nothing on GitHub runs the tests, and the reviewer's "PR text claims N tests pass" check can only compare text.
-4. **Q4. Merge style.** Do you intend merge commits, or squash as PR #5 asked? It decides whether the reviewer checks commit subjects or the PR title.
-5. **Q5. Auto-merging lessons.** The proposal is none for this repo. Do you agree?
-6. **Q6. Consumers.** Do other repos already use `.claude/dev-team/` customizations? If so, L1/L2 renames rate High (breaking); if not, Medium.
-7. **Q7. Inline cap.** Is 5 right, or should it be 10 as in recovery-platform?
+- The project-check tests pass: `node --test '.claude/pr-review/checks/test/*.test.mjs'` gives 31/31.
+- The kit's `validate` reports ok, and `actionlint` is clean on both workflows.
+- **Historical dry runs** (kit `local` at `85ab8f9`, knowledge from the working copy):
+  - **PR #1** (`747b8a6...09f238e`) routes `role-registry`, `prompt-sections`, `prompt-bytes`, `plugin-skills`, `tool-names`, `cli-surface`, `placeholders` and `sdk-assumptions`. `tool-lists` reports the role tool sets moving to `src/agents/shared.ts`.
+  - **PR #5** (`9fe2d03...74ef64e`) routes 14 of the 16 link types and all classes. `policy-loosening` lists 49 new allow cases and no deny case moved or removed (that is accurate: PR #5 tightened, and its loosenings were new allow cases). `carve-outs` points at four files.
+  - **`36ed855`** (an intentional loosening: no-op git editors and `.env.ts`) gets a `policy-loosening` fact listing exactly those ten new allow cases, which the commit body declares.
+  - **`a945089`** (the class-2 historical bug: the message-stripping exemption that was later withdrawn) gets a `policy-loosening` fact listing the 12 commit and PR message cases that became allowed. This is the signal that would have pointed a reviewer at the carve-out. `carve-outs` didn't fire here, because the exemption's lines don't use the trigger words, so `policy-loosening` is the stronger of the two.
+- **A fixture review** on `a945089`, with a planted security finding and one Medium finding, renders the pointer as "Security-relevant issue (High) in src shell rules". Neither the planted detail nor the anchor appears anywhere in the output or the decoded ledger. Without `PR_REVIEW_ID_KEY` locally, the pointer says the details could not be delivered, as designed.
+- **Not verified locally:**
+  - anything that needs GitHub (posting, advisories, the learning PR)
+  - the mandatory engine properties in §9, which are not yet in the pinned SHA
+  - the model's actual behaviour
 
-## 12. Follow-ups outside this project
+## 12. Follow-ups
 
-- A CI workflow for typecheck and tests (Q3).
-- A test that cross-checks role names in `src/orchestrator/prompt.md` against `ROLES` (L1). PR #1 flagged it, and it is still unchecked.
+- Load rules from `main` for stacked PRs (`trustRef`). It needs the kit to keep knowledge out of reach of the action's `.claude/` restore.
+- A minimal CI workflow for `pnpm typecheck && pnpm test` (Q3).
+- A test that cross-checks role names in `src/orchestrator/prompt.md` against `ROLES` (L1, flagged in PR #1).
 - Prettier protection for `plugin/**/SKILL.md` if its bytes matter for caching (L14).
+- Re-pin the kit to the SHA that carries the §9 properties, then re-run `validate` and the dry runs.
