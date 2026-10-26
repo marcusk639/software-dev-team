@@ -9,6 +9,7 @@ import {
   PROMPT_NAMES,
   runTeam,
 } from "./orchestrator/index.js";
+import { loadProjectAgents } from "./project-agents.js";
 import { CUSTOMIZATION_DIR, loadCustomizations } from "./prompts.js";
 import { AGENTS, loadTeam, ROLES, TEAM_CONVENTIONS } from "./team.js";
 
@@ -58,6 +59,14 @@ async function main(): Promise<number> {
         `${role}  [${AGENTS[role].model ?? "default"}]${status(role)}\n  ${AGENTS[role].description}\n`,
       );
     }
+    // The same checks a run applies, so a rejected agent shows up here first.
+    const project = loadProjectAgents(cli.cwd);
+    for (const agent of project.agents) {
+      console.log(
+        `${agent.name}  [${agent.model ?? "default"}]  ${DIM}(project agent from .claude/agents)${RESET}\n`,
+      );
+    }
+    for (const warning of project.warnings) console.error(warning);
     return 0;
   }
 
@@ -88,6 +97,7 @@ async function main(): Promise<number> {
     maxBudgetUsd: cli.maxBudgetUsd,
     model: cli.model,
     onMessage: createRenderer({ verbose: cli.verbose }),
+    onWarning: (warning) => console.error(`${DIM}${warning}${RESET}`),
   });
 
   if (summary.ledgerText) {

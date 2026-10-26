@@ -5,7 +5,7 @@ import type {
   PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
 import { realpathSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
   isSecretGlob,
@@ -240,8 +240,13 @@ export function approvalReason(
   if (!READ_TOOLS.includes(toolName)) return null;
   const path =
     toolName === "Read" ? targetPath(input) : asString(input.path);
+  // Large tool results are saved under <transcript dir>/<session id>/; only
+  // that session directory is exempt, never the transcript's parent.
   const roots = transcriptPath
-    ? [...policy.readRoots, dirname(transcriptPath)]
+    ? [
+        ...policy.readRoots,
+        join(dirname(transcriptPath), basename(transcriptPath, ".jsonl")),
+      ]
     : policy.readRoots;
   if (resolvesInside(policy.cwd, roots, path)) return null;
   return `${path || "That path"} is outside the project. Reading outside --cwd needs the human operator's approval${policy.interactive ? "" : ', which an unattended (--yes) run cannot give; allow the directory with --allow "Read(//abs/dir/**)" or ask the operator'}.`;

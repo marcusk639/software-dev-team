@@ -12,7 +12,7 @@ import {
   createPolicy,
   createSafetyHooks,
 } from "../permissions.js";
-import { projectAgentNames } from "../project-agents.js";
+import { loadProjectAgents } from "../project-agents.js";
 import {
   EMPTY_SUMMARY,
   finishSummary,
@@ -89,6 +89,8 @@ export interface RunOptions {
   maxBudgetUsd?: number | undefined;
   model?: string | undefined;
   onMessage?: ((message: SDKMessage) => void) | undefined;
+  /** Configuration problems that do not stop the run, e.g. a rejected project agent. Defaults to console.warn. */
+  onWarning?: ((warning: string) => void) | undefined;
 }
 
 export interface RunSummary extends Summary {
@@ -97,11 +99,28 @@ export interface RunSummary extends Summary {
   ledgerText: string;
 }
 
-export async function runTeam(options: RunOptions): Promise<RunSummary> {
+/**
+ * Everything runTeam hands to query(), built without starting a run so the
+ * wiring (hooks, permission mode, approval gate, pinned models, environment)
+ * can be tested.
+ */
+export function prepareRun(options: RunOptions): {
+  queryOptions: Options;
+  ledger: ReturnType<typeof createLedger>;
+  warnings: string[];
+} {
+  const project = loadProjectAgents(options.cwd);
   const policy = createPolicy({
     cwd: options.cwd,
-    agents: [...ROLES, ...projectAgentNames(options.cwd)],
-    pinnedModels: ROLES.filter((role) => AGENTS[role].model !== undefined),
+    agents: [...ROLES, ...project.agents.map((agent) => agent.name)],
+    // A project agent that declares a model gets the same protection as a
+    // team role: the manager may not swap it for a cheaper or other model.
+    pinnedModels: [
+      ...ROLES.filter((role) => AGENTS[role].model !== undefined),
+      ...project.agents.flatMap((agent) =>
+        agent.model === undefined ? [] : [agent.name],
+      ),
+    ],
     readRoots: readRootsFromAllowRules(options.allow ?? []),
     // Without --yes a human answers prompts, so a read outside --cwd is put
     // to them; unattended, it is denied.
@@ -163,6 +182,13 @@ export async function runTeam(options: RunOptions): Promise<RunSummary> {
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.resume === undefined ? {} : { resume: options.resume }),
   };
+
+  return { queryOptions, ledger, warnings: project.warnings };
+}
+
+export async function runTeam(options: RunOptions): Promise<RunSummary> {
+  const { queryOptions, ledger, warnings } = prepareRun(options);
+  for (const warning of warnings) (options.onWarning ?? console.warn)(warning);
 
   const stream = query({ prompt: options.task, options: queryOptions });
 
