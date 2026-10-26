@@ -484,8 +484,13 @@ function wordsReachSecret(command: string, cwd: string | undefined): boolean {
         }
         try {
           lstatSync(resolve(cwd, word));
-        } catch {
-          return false;
+        } catch (error) {
+          // Not a path. Anything else (EACCES) means the word cannot be
+          // checked, and the caller turns the throw into a deny.
+          if (NOT_A_PATH.has((error as NodeJS.ErrnoException).code ?? "")) {
+            return false;
+          }
+          throw error;
         }
         return isSecretPath(cwd, word);
       });
@@ -493,6 +498,9 @@ function wordsReachSecret(command: string, cwd: string | undefined): boolean {
 }
 
 const NAME_ONLY = new Set(["ls", "echo", "printf", "tree", "du", "stat"]);
+
+/** lstat errors that mean a word names no file, rather than one that cannot be checked. */
+const NOT_A_PATH = new Set(["ENOENT", "ENOTDIR", "ENAMETOOLONG", "EINVAL"]);
 
 /**
  * A recursive grep ignores .gitignore, so one rooted at the project (or with

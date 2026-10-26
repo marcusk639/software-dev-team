@@ -18,6 +18,7 @@ import { bashDenyReason } from "./permissions/shell.js";
 import {
   DELEGATION_TOOLS,
   isOneOf,
+  isRecord,
   MANAGER_ALLOWED,
   type ToolName,
   WRITE_TOOLS,
@@ -55,6 +56,27 @@ export interface Policy {
   readonly [BUILT_BY_CREATE_POLICY]: true;
 }
 
+/** A Set whose contents are fixed: add, delete and clear throw. */
+class FrozenSet<T> extends Set<T> {
+  #sealed = false;
+  constructor(values: Iterable<T>) {
+    // Set's constructor would call the overridden add before #sealed exists.
+    super();
+    for (const value of values) super.add(value);
+    this.#sealed = true;
+  }
+  override add(value: T): this {
+    if (this.#sealed) throw new TypeError("The policy's sets are read-only.");
+    return super.add(value);
+  }
+  override delete(): boolean {
+    throw new TypeError("The policy's sets are read-only.");
+  }
+  override clear(): void {
+    throw new TypeError("The policy's sets are read-only.");
+  }
+}
+
 const CREDENTIAL_NAME =
   /(API_?KEY|TOKEN|SECRET|PASSW(OR)?D|PRIVATE_KEY|CREDENTIALS?)/i;
 // Short values (feature flags, "true") would match ordinary text.
@@ -86,8 +108,8 @@ export function createPolicy(options: {
       ...[...(options.readRoots ?? [])].map(realOrResolved),
     ]),
     interactive: options.interactive ?? false,
-    agents: new Set(options.agents),
-    pinnedModels: new Set(options.pinnedModels),
+    agents: new FrozenSet(options.agents),
+    pinnedModels: new FrozenSet(options.pinnedModels),
     secretValues: Object.freeze(
       Object.entries(env).flatMap(([name, value]) =>
         CREDENTIAL_NAME.test(name) &&
@@ -180,7 +202,10 @@ export function denyReason(
   }
 
   if (toolName === "Bash") {
-    return bashDenyReason(asString(input.command), policy.cwd);
+    if (typeof input.command !== "string") {
+      return "Bash needs a command, and it must be a string.";
+    }
+    return bashDenyReason(input.command, policy.cwd);
   }
 
   if (toolName === "Read" && isSecretPath(policy.cwd, targetPath(input))) {
@@ -206,6 +231,17 @@ export function denyReason(
   }
 
   if (isOneOf(WRITE_TOOLS, toolName)) {
+    // A path that is missing or not a string would be checked as "", which
+    // the tool might still resolve to something.
+    const fields = (["file_path", "notebook_path"] as const).filter(
+      (field) => input[field] !== undefined,
+    );
+    if (
+      fields.length === 0 ||
+      fields.some((field) => typeof input[field] !== "string" || input[field] === "")
+    ) {
+      return `${toolName} needs the path it writes, and it must be a string.`;
+    }
     for (const path of targetPaths(input)) {
       const reason = writeDenyReason(policy.cwd, path);
       if (reason) return reason;
@@ -305,7 +341,10 @@ export function approvalReason(
  * agent's later tool calls were rejected before this hook ran. Parallelism
  * comes from several calls in one message.
  */
-const FOREGROUND_ONLY = [...DELEGATION_TOOLS, "Bash"];
+const FOREGROUND_ONLY = [
+  ...DELEGATION_TOOLS,
+  "Bash",
+] as const satisfies readonly ToolName[];
 
 const deny = (reason: string) => ({
   hookSpecificOutput: {
@@ -337,18 +376,20 @@ export function createSafetyHooks(
             try {
               if (input.hook_event_name !== "PreToolUse")
                 return { continue: true };
-              const toolInput = (input.tool_input ?? {}) as Record<
-                string,
-                unknown
-              >;
+              const toolInput = isRecord(input.tool_input)
+                ? input.tool_input
+                : undefined;
               const reason =
-                actorOf(input).kind === "manager" &&
-                !isOneOf(MANAGER_ALLOWED, input.tool_name)
-                  ? `The manager reads and delegates; it does not use ${input.tool_name}. Delegate this to the specialist whose role covers it.`
-                  : safeDenyReason(policy, input.tool_name, toolInput);
-              if (reason !== null) {
-                onDeny?.(input.tool_use_id, reason);
-                return deny(reason);
+                toolInput === undefined
+                  ? `The ${input.tool_name} call's input is not an object, so it cannot be checked and is blocked.`
+                  : actorOf(input).kind === "manager" &&
+                      !isOneOf(MANAGER_ALLOWED, input.tool_name)
+                    ? `The manager reads and delegates; it does not use ${input.tool_name}. Delegate this to the specialist whose role covers it.`
+                    : safeDenyReason(policy, input.tool_name, toolInput);
+              if (reason !== null || toolInput === undefined) {
+                const why = reason ?? "The call's input is not an object.";
+                onDeny?.(input.tool_use_id, why);
+                return deny(why);
               }
               const approval = approvalReason(
                 policy,
@@ -371,7 +412,7 @@ export function createSafetyHooks(
                   },
                 };
               }
-              if (!FOREGROUND_ONLY.includes(input.tool_name)) {
+              if (!isOneOf(FOREGROUND_ONLY, input.tool_name)) {
                 return { continue: true };
               }
               return {

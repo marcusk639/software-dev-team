@@ -13,9 +13,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
 import {
   approvalReason,
   createPolicy,
+  createSafetyHooks,
   denyReason,
   type Policy,
 } from "./permissions.js";
@@ -291,4 +293,73 @@ describe("false positives: no-op git editors and .env.ts source files", () => {
     ["Read", { file_path: ".env" }],
     bash("cat .env.production"),
   ]);
+});
+
+describe("malformed tool input is denied, not read as empty", () => {
+  denies(/must be a string/, [
+    ["Bash", { command: ["rm", "-rf", "src"] }],
+    ["Bash", {}],
+    ["Write", { file_path: 1, content: "x" }],
+    ["Edit", { old_string: "a", new_string: "b" }],
+    ["NotebookEdit", { notebook_path: null, new_source: "x" }],
+  ]);
+  allows([["Write", { file_path: "src/b.ts", content: "x" }]]);
+
+  it("denies a hook call whose tool_input is not an object", async () => {
+    const hooks = createSafetyHooks(policy);
+    for (const tool_input of [null, "rm -rf src", ["x"]]) {
+      const out = (await hooks.PreToolUse[0]!.hooks[0]!(
+        {
+          hook_event_name: "PreToolUse",
+          session_id: "s",
+          transcript_path: "/t",
+          cwd: project,
+          tool_name: "Bash",
+          tool_input,
+          tool_use_id: "t1",
+          agent_type: "qa-tester",
+          agent_id: "a1",
+        } as HookInput,
+        "t1",
+        { signal: new AbortController().signal },
+      )) as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } };
+      assert.equal(out.hookSpecificOutput?.permissionDecision, "deny", String(tool_input));
+      assert.match(out.hookSpecificOutput?.permissionDecisionReason ?? "", /not an object/);
+    }
+  });
+});
+
+describe("a word that cannot be checked denies instead of passing", () => {
+  const locked = join(project, "locked");
+  mkdirSync(locked, { mode: 0o000 });
+  it("denies a command naming a file it cannot lstat (EACCES)", async () => {
+    assert.throws(() => denyReason(policy, "Bash", { command: "cat locked/config" }), /EACCES/);
+    // The hook turns the throw into a deny.
+    const out = (await createSafetyHooks(policy).PreToolUse[0]!.hooks[0]!(
+      {
+        hook_event_name: "PreToolUse",
+        session_id: "s",
+        transcript_path: "/t",
+        cwd: project,
+        tool_name: "Bash",
+        tool_input: { command: "cat locked/config" },
+        tool_use_id: "t1",
+        agent_type: "qa-tester",
+        agent_id: "a1",
+      } as HookInput,
+      "t1",
+      { signal: new AbortController().signal },
+    )) as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } };
+    assert.equal(out.hookSpecificOutput?.permissionDecision, "deny");
+    assert.match(out.hookSpecificOutput?.permissionDecisionReason ?? "", /could not evaluate this call \(EACCES/);
+  });
+  allows([bash(`echo ${"x".repeat(5000)}`), bash("cat missing/file.txt")]);
+});
+
+describe("the policy's agent lists cannot be changed after it is built", () => {
+  it("refuses to add to agents or pinnedModels", () => {
+    assert.throws(() => (policy.agents as Set<string>).add("intruder"), /read-only/);
+    assert.throws(() => (policy.pinnedModels as Set<string>).delete("x"), /read-only/);
+    assert.equal(policy.agents.has("intruder"), false);
+  });
 });
