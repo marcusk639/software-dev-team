@@ -356,3 +356,28 @@ describe("ledger integrity", () => {
     assert.doesNotThrow(() => ledger.observe({ type: "result" } as unknown as SDKMessage));
   });
 });
+
+describe("ledger: who made the call (I8)", () => {
+  it("records a --agent main-thread call (agent_type, no agent_id) as the manager", async () => {
+    const ledger = createLedger({ cwd: CWD, secretValues: [] });
+    await fire(ledger, {
+      ...base("m1", "Bash", { command: "pnpm test" }),
+      agent_type: "qa-tester",
+      hook_event_name: "PreToolUse",
+    });
+    const [entry] = ledger.entries();
+    assert.equal(entry?.role, "manager");
+    assert.equal(entry?.agentId, undefined);
+  });
+
+  it("records a subagent call under its agent type and id", async () => {
+    const ledger = createLedger({ cwd: CWD, secretValues: [] });
+    await fire(ledger, {
+      ...base("s1", "Bash", { command: "pnpm test" }, "qa-tester"),
+      hook_event_name: "PreToolUse",
+    });
+    const [entry] = ledger.entries();
+    assert.equal(entry?.role, "qa-tester");
+    assert.equal(entry?.agentId, "a1b2c3d4e5f6");
+  });
+});

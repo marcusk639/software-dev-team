@@ -4,6 +4,7 @@ import type {
   SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { relative } from "node:path";
+import { actorOf } from "./permissions.js";
 
 export type Outcome = "ok" | "failed" | "blocked" | "refused" | "unfinished";
 
@@ -92,10 +93,11 @@ export function createLedger(options: {
 
   const handler = async (input: HookInput) => {
     switch (input.hook_event_name) {
-      case "PreToolUse":
+      case "PreToolUse": {
+        const actor = actorOf(input);
         byId.set(input.tool_use_id, {
-          role: input.agent_type ?? "manager",
-          agentId: input.agent_id,
+          role: actor.kind === "manager" ? "manager" : actor.type,
+          agentId: actor.kind === "manager" ? undefined : actor.id,
           tool: input.tool_name,
           detail: printable(
             redact(
@@ -116,6 +118,7 @@ export function createLedger(options: {
           earlyBlocks.delete(input.tool_use_id);
         }
         break;
+      }
       case "PostToolUse": {
         settle(input.tool_use_id, "ok");
         const entry = byId.get(input.tool_use_id);
