@@ -325,6 +325,9 @@ const ENV_DUMP = [
   // ordinary, and grepping or editing it must keep working.
   /\b(node|nodejs|python3?|ruby|perl|deno|bun|php)\b[^|&\n]*\s(-e|-c|-p|-E|-r|--eval|--print)\b[^\n]*(\benv\b|environ|getenv|\bENV\b|%ENV|\$_ENV)/,
   /\bsecurity\s+(find|dump)-\w+/,
+  // jq's `env` builtin and `$ENV` are the environment as an object. The
+  // filter may hold a `|`, so the match runs to the end of the command.
+  /\bjq\b[^;&\n]*?(?:(?<![.\w$])env\b|\$ENV\b)/,
 ];
 
 /** Mentions of git internals or agent configuration inside a shell command. */

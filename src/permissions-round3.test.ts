@@ -363,3 +363,13 @@ describe("the policy's agent lists cannot be changed after it is built", () => {
     assert.equal(policy.agents.has("intruder"), false);
   });
 });
+
+describe("jq's env builtin prints the environment", () => {
+  denies(ENV_OR_SECRET, [
+    bash("jq -n env"),
+    bash("jq -n '$ENV'"),
+    bash("jq -n 'env.ANTHROPIC_API_KEY'"),
+    bash("echo {} | jq 'env | keys'"),
+  ]);
+  allows([bash("jq .version package.json"), bash("jq '.scripts.test' package.json")]);
+});
