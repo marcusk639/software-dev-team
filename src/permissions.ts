@@ -5,6 +5,7 @@ import type {
   PermissionResult,
 } from "@anthropic-ai/claude-agent-sdk";
 import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
@@ -17,7 +18,9 @@ import { bashDenyReason } from "./permissions/shell.js";
 import {
   DELEGATION_TOOLS,
   isOneOf,
+  isRecord,
   MANAGER_ALLOWED,
+  type ToolName,
   WRITE_TOOLS,
 } from "./tools.js";
 
@@ -53,6 +56,27 @@ export interface Policy {
   readonly [BUILT_BY_CREATE_POLICY]: true;
 }
 
+/** A Set whose contents are fixed: add, delete and clear throw. */
+class FrozenSet<T> extends Set<T> {
+  #sealed = false;
+  constructor(values: Iterable<T>) {
+    // Set's constructor would call the overridden add before #sealed exists.
+    super();
+    for (const value of values) super.add(value);
+    this.#sealed = true;
+  }
+  override add(value: T): this {
+    if (this.#sealed) throw new TypeError("The policy's sets are read-only.");
+    return super.add(value);
+  }
+  override delete(): boolean {
+    throw new TypeError("The policy's sets are read-only.");
+  }
+  override clear(): void {
+    throw new TypeError("The policy's sets are read-only.");
+  }
+}
+
 const CREDENTIAL_NAME =
   /(API_?KEY|TOKEN|SECRET|PASSW(OR)?D|PRIVATE_KEY|CREDENTIALS?)/i;
 // Short values (feature flags, "true") would match ordinary text.
@@ -84,8 +108,8 @@ export function createPolicy(options: {
       ...[...(options.readRoots ?? [])].map(realOrResolved),
     ]),
     interactive: options.interactive ?? false,
-    agents: new Set(options.agents),
-    pinnedModels: new Set(options.pinnedModels),
+    agents: new FrozenSet(options.agents),
+    pinnedModels: new FrozenSet(options.pinnedModels),
     secretValues: Object.freeze(
       Object.entries(env).flatMap(([name, value]) =>
         CREDENTIAL_NAME.test(name) &&
@@ -168,14 +192,20 @@ export function denyReason(
     if (input.model !== undefined && policy.pinnedModels.has(type)) {
       return `${type} runs on the model its definition sets. Delegate again without a model override.`;
     }
-    if (input.isolation === "remote") {
-      return "Remote agents run outside this run's safety hooks. Delegate without isolation: remote.";
+    // A remote agent runs outside this run's safety hooks, and SDK 0.3.283
+    // creates a worktree under <repo>/.claude/worktrees/, where the agent
+    // could not write. Delegations work in the checkout itself.
+    if (input.isolation !== undefined) {
+      return `Delegations run in the project checkout: isolation ${JSON.stringify(input.isolation)} is not supported (a remote agent runs outside the safety hooks; a worktree lands under .claude/, which agents may not write). Delegate without isolation.`;
     }
     return null;
   }
 
   if (toolName === "Bash") {
-    return bashDenyReason(asString(input.command), policy.cwd);
+    if (typeof input.command !== "string") {
+      return "Bash needs a command, and it must be a string.";
+    }
+    return bashDenyReason(input.command, policy.cwd);
   }
 
   if (toolName === "Read" && isSecretPath(policy.cwd, targetPath(input))) {
@@ -183,8 +213,9 @@ export function denyReason(
   }
 
   if (toolName === "Grep" || toolName === "Glob") {
-    // Glob only lists names, so its pattern is not screened; Grep prints
-    // contents and always runs ripgrep with --hidden.
+    // Glob only lists names, so its pattern is not screened for secrets
+    // (approvalReason confines where it looks); Grep prints contents and is
+    // assumed to run ripgrep with --hidden (unverified against 0.3.283).
     if (
       isSecretPath(policy.cwd, asString(input.path)) ||
       (toolName === "Grep" && isSecretGlob(asString(input.glob)))
@@ -194,13 +225,24 @@ export function denyReason(
     if (
       toolName === "Grep" &&
       input.output_mode === "content" &&
-      !resolvesInside(policy.cwd, policy.readRoots, asString(input.path))
+      !resolvesInside(policy.cwd, policy.readRoots, fromHome(asString(input.path)))
     ) {
       return "Printing search results from outside the project is not permitted: Grep searches hidden files, credentials included. Search inside the project, or ask the human operator.";
     }
   }
 
   if (isOneOf(WRITE_TOOLS, toolName)) {
+    // A path that is missing or not a string would be checked as "", which
+    // the tool might still resolve to something.
+    const fields = (["file_path", "notebook_path"] as const).filter(
+      (field) => input[field] !== undefined,
+    );
+    if (
+      fields.length === 0 ||
+      fields.some((field) => typeof input[field] !== "string" || input[field] === "")
+    ) {
+      return `${toolName} needs the path it writes, and it must be a string.`;
+    }
     for (const path of targetPaths(input)) {
       const reason = writeDenyReason(policy.cwd, path);
       if (reason) return reason;
@@ -223,7 +265,53 @@ function safeDenyReason(
   }
 }
 
-const READ_TOOLS = ["Read", "Grep", "Glob"];
+const READ_TOOLS = ["Read", "Grep", "Glob"] as const satisfies readonly ToolName[];
+
+/**
+ * The directory a glob starts from: its segments before the first wildcard,
+ * with `~` as the home directory, resolved against `base`. `/etc/*` starts at
+ * /etc, `../../**` two levels up, `src/*.ts` at src.
+ */
+function globBase(glob: string, base: string): string {
+  const segments = glob.split("/");
+  const wild = segments.findIndex((s) => /[?*[{]/.test(s));
+  const fixed = (wild === -1 ? segments : segments.slice(0, wild)).join("/");
+  return resolve(base, fromHome(fixed) || (glob.startsWith("/") ? "/" : "."));
+}
+
+/**
+ * `~` and `~/…` as the home directory, the way a shell (and possibly the
+ * tool) reads them; anything else unchanged. Treating `~` as a literal
+ * directory under --cwd would wrongly count it as inside the project.
+ */
+function fromHome(path: string): string {
+  return path === "~" || path.startsWith("~/")
+    ? resolve(homedir(), `.${path.slice(1)}`)
+    : path;
+}
+
+/**
+ * Every place a read tool call can reach: Read's file, Grep's and Glob's
+ * `path`, the static base of Glob's pattern, and the base of each Grep glob
+ * piece that is absolute, starts at `~` or climbs with `..`.
+ */
+function readTargets(
+  policy: Policy,
+  toolName: string,
+  input: Record<string, unknown>,
+): string[] {
+  if (toolName === "Read") return [fromHome(targetPath(input))];
+  const path = fromHome(asString(input.path));
+  const searchRoot = resolve(policy.cwd, path || ".");
+  if (toolName === "Glob") {
+    return [path, globBase(asString(input.pattern), searchRoot)];
+  }
+  const pieces = asString(input.glob)
+    .split(/[\s,]+/)
+    .map((piece) => piece.replace(/^!/, ""))
+    .filter((piece) => /^(\/|~)|(^|\/)\.\.(\/|$)/.test(piece));
+  return [path, ...pieces.map((piece) => globBase(piece, searchRoot))];
+}
 
 /**
  * Why a read needs a human's approval: it reaches outside --cwd and the
@@ -237,19 +325,21 @@ export function approvalReason(
   input: Record<string, unknown>,
   transcriptPath?: string,
 ): string | null {
-  if (!READ_TOOLS.includes(toolName)) return null;
-  const path =
-    toolName === "Read" ? targetPath(input) : asString(input.path);
+  if (!isOneOf(READ_TOOLS, toolName)) return null;
   // Large tool results are saved under <transcript dir>/<session id>/; only
   // that session directory is exempt, never the transcript's parent.
+  // (Assumed from observed runs; unverified against SDK 0.3.283's docs.)
   const roots = transcriptPath
     ? [
         ...policy.readRoots,
         join(dirname(transcriptPath), basename(transcriptPath, ".jsonl")),
       ]
     : policy.readRoots;
-  if (resolvesInside(policy.cwd, roots, path)) return null;
-  return `${path || "That path"} is outside the project. Reading outside --cwd needs the human operator's approval${policy.interactive ? "" : ', which an unattended (--yes) run cannot give; allow the directory with --allow "Read(//abs/dir/**)" or ask the operator'}.`;
+  const outside = readTargets(policy, toolName, input).find(
+    (path) => !resolvesInside(policy.cwd, roots, path),
+  );
+  if (outside === undefined) return null;
+  return `${outside || "That path"} is outside the project. Reading outside --cwd needs the human operator's approval${policy.interactive ? "" : ', which an unattended (--yes) run cannot give; allow the directory with --allow "Read(//abs/dir/**)" or ask the operator'}.`;
 }
 
 /**
@@ -260,7 +350,10 @@ export function approvalReason(
  * agent's later tool calls were rejected before this hook ran. Parallelism
  * comes from several calls in one message.
  */
-const FOREGROUND_ONLY = [...DELEGATION_TOOLS, "Bash"];
+const FOREGROUND_ONLY = [
+  ...DELEGATION_TOOLS,
+  "Bash",
+] as const satisfies readonly ToolName[];
 
 const deny = (reason: string) => ({
   hookSpecificOutput: {
@@ -292,18 +385,20 @@ export function createSafetyHooks(
             try {
               if (input.hook_event_name !== "PreToolUse")
                 return { continue: true };
-              const toolInput = (input.tool_input ?? {}) as Record<
-                string,
-                unknown
-              >;
+              const toolInput = isRecord(input.tool_input)
+                ? input.tool_input
+                : undefined;
               const reason =
-                actorOf(input).kind === "manager" &&
-                !isOneOf(MANAGER_ALLOWED, input.tool_name)
-                  ? `The manager reads and delegates; it does not use ${input.tool_name}. Delegate this to the specialist whose role covers it.`
-                  : safeDenyReason(policy, input.tool_name, toolInput);
-              if (reason !== null) {
-                onDeny?.(input.tool_use_id, reason);
-                return deny(reason);
+                toolInput === undefined
+                  ? `The ${input.tool_name} call's input is not an object, so it cannot be checked and is blocked.`
+                  : actorOf(input).kind === "manager" &&
+                      !isOneOf(MANAGER_ALLOWED, input.tool_name)
+                    ? `The manager reads and delegates; it does not use ${input.tool_name}. Delegate this to the specialist whose role covers it.`
+                    : safeDenyReason(policy, input.tool_name, toolInput);
+              if (reason !== null || toolInput === undefined) {
+                const why = reason ?? "The call's input is not an object.";
+                onDeny?.(input.tool_use_id, why);
+                return deny(why);
               }
               const approval = approvalReason(
                 policy,
@@ -326,7 +421,7 @@ export function createSafetyHooks(
                   },
                 };
               }
-              if (!FOREGROUND_ONLY.includes(input.tool_name)) {
+              if (!isOneOf(FOREGROUND_ONLY, input.tool_name)) {
                 return { continue: true };
               }
               return {
@@ -345,6 +440,29 @@ export function createSafetyHooks(
       },
     ],
   };
+}
+
+/** A search as the approval prompt shows it: the pattern, where it looks, and its glob. */
+function searchShown(
+  policy: Policy,
+  toolName: "Grep" | "Glob",
+  input: Record<string, unknown>,
+): string {
+  const pattern = asString(input.pattern);
+  const path = asString(input.path);
+  const glob = asString(input.glob);
+  const base =
+    toolName === "Glob"
+      ? globBase(pattern, resolve(policy.cwd, path || "."))
+      : undefined;
+  return [
+    pattern,
+    path && `in ${path}`,
+    glob && `(glob ${glob})`,
+    base !== undefined && base !== policy.cwd && `(from ${base})`,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /** Asks the human a question and resolves with the answer line. */
@@ -408,10 +526,12 @@ export function createPermissionGate(
     const shown =
       toolName === "Bash"
         ? asString(input.command)
-        : targetPath(input) ||
-          asString(input.url) ||
-          asString(input.pattern) ||
-          JSON.stringify(input);
+        : toolName === "Grep" || toolName === "Glob"
+          ? searchShown(policy, toolName, input)
+          : targetPath(input) ||
+            asString(input.url) ||
+            asString(input.pattern) ||
+            JSON.stringify(input);
     const detail = shown.replace(/[\x00-\x1f\x7f]+/g, " ").slice(0, 2000);
 
     let answer: string;

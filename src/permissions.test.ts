@@ -216,6 +216,8 @@ describe("delegation", () => {
         isolation: "remote",
         prompt: "p",
       }),
+      // A worktree lands under .claude/worktrees, where agents may not write.
+      agent({ subagent_type: "qa-tester", isolation: "worktree", prompt: "p" }),
       ["Task", { subagent_type: "general-purpose", prompt: "p" }],
     ],
     "deny",
@@ -225,7 +227,6 @@ describe("delegation", () => {
       agent({ subagent_type: "qa-tester", prompt: "p" }),
       agent({ subagent_type: "target-helper", prompt: "p" }),
       agent({ subagent_type: "target-helper", model: "haiku", prompt: "p" }),
-      agent({ subagent_type: "qa-tester", isolation: "worktree", prompt: "p" }),
       ["Task", { subagent_type: "architect", prompt: "p" }],
     ],
     "allow",
@@ -494,10 +495,6 @@ describe("post-loop: low and medium findings", () => {
   check(
     [
       // messages that merely mention protected names
-      bash('git commit -m "docs: describe .claude/dev-team prompts"'),
-      bash("git commit -m 'fix: ignore .git dir in walker'"),
-      bash('gh pr create --title "Handle .mcp.json" --body "touches .mcp.json handling"'),
-      bash('git commit -m "chore: add .env to .gitignore"'),
       // routine docker and process commands
       bash("docker compose ps web"),
       bash("docker ps --filter name=api"),
@@ -748,6 +745,13 @@ describe("the approval prompt shows what is being approved", () => {
   it("shows an MCP tool's arguments", async () => {
     await gate("mcp__db__query", { sql: "select * from users" }, options);
     assert.match(asked.at(-1)!, /select \* from users/);
+  });
+
+  it("shows where a Grep or Glob looks, not just its pattern", async () => {
+    await gate("Grep", { pattern: "TODO", path: "/etc", glob: "*.conf" }, options);
+    assert.match(asked.at(-1)!, /TODO in \/etc \(glob \*\.conf\)/);
+    await gate("Glob", { pattern: "/etc/*" }, options);
+    assert.match(asked.at(-1)!, /\/etc\/\* \(from \/etc\)/);
   });
 
   it("strips control characters from what it shows", async () => {

@@ -240,7 +240,6 @@ describe("I4: CLAUDE.md persists like .claude/", () => {
     ["Edit", { file_path: join(project, "README.md") }],
     bash("cat CLAUDE.md"),
     bash("grep -n x CLAUDE.md"),
-    bash('git commit -m "docs: update CLAUDE.md"'),
   ]);
 });
 

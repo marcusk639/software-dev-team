@@ -6,6 +6,7 @@ import {
   gitConfigWrites,
   gitGlobalOptionReason,
   normalizeGit,
+  shellWords,
 } from "./git.js";
 import { globTargets, hasDotLedWildcard } from "./globs.js";
 import {
@@ -24,9 +25,9 @@ import {
 
 /**
  * Wrappers that run the command after them: `sudo env`, `nice -n 5 env`,
- * `bash -c env`, `! env`. Their options and numeric arguments are skipped.
+ * `bash -c env`, `sh -cm env`, `! env`. Their options and numeric arguments are skipped.
  */
-const WRAPPER = String.raw`(?:sudo|doas|time|command|builtin|exec|nohup|nice|eval|stdbuf|xargs|watch|timeout|then|do|else|!|(?:ba|z|da|k|fi)?sh\s+-c)`;
+const WRAPPER = String.raw`(?:sudo|doas|time|command|builtin|exec|nohup|nice|eval|stdbuf|xargs|watch|timeout|then|do|else|!|(?:ba|z|da|k|fi)?sh\s+-[a-zA-Z]*c[a-zA-Z]*)`;
 /**
  * A command position: the start, after a shell separator or keyword, or after
  * a wrapper. `cd env` and `docker ps` are arguments, not commands.
@@ -34,7 +35,7 @@ const WRAPPER = String.raw`(?:sudo|doas|time|command|builtin|exec|nohup|nice|eva
 const AT = String.raw`(?:^|[;&|(){\x60\n]\s*|(?<![\w./-])${WRAPPER}(?:\s+(?:-\S+|\d[\w.]*))*\s+)`;
 /** Leading `NAME=value` assignments, which still leave the command in place. */
 const ASSIGNMENTS = String.raw`(?:\w+=\S*\s+)*`;
-const ENDS = String.raw`\s*($|[|;&<>)}\x60])`;
+const ENDS = String.raw`[ \t]*($|[|;&<>)}\x60\n])`;
 
 /**
  * Commands that are never allowed, in any permission mode. Matched against
@@ -51,9 +52,10 @@ const HARD_DENY: Array<{
   {
     // rm as its own word, however it is reached (after a wrapper, inside
     // bash -c, path-qualified). A subcommand of git, docker and the like is
-    // a different tool: `git rm -r --cached` only untracks files.
+    // a different tool: `git rm -r --cached` only untracks files. Only a
+    // space or tab joins the two: after a newline, rm is its own command.
     pattern:
-      /(?<!\b(?:git|docker|podman|kubectl|helm)\s+)(?:^|(?<=[\s;&|({'"`]))(?:\S*\/)?\\?rm\b[^|;&\n]*\s(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?=\s|$|['"])/,
+      /(?<!\b(?:git|docker|podman|kubectl|helm)[ \t]+)(?:^|(?<=[\s;&|({'"`]))(?:\S*\/)?\\?rm\b[^|;&\n]*\s(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?=\s|$|['"])/,
     why: "recursive delete",
     // `git -C . rm -r --cached` is git's rm once -C is dropped.
     normalizedOnly: true,
@@ -133,15 +135,28 @@ const HARD_DENY: Array<{
     why: "discards uncommitted work",
   },
   {
+    // read-tree -u writes the index back over the working tree; --reset
+    // drops unmerged entries and, with -u, local changes.
+    pattern:
+      /\bgit\s+read-tree\b[^|;&\n]*\s(?:-[a-zA-Z]*u[a-zA-Z]*|--reset)(?=\s|$)/,
+    why: "discards uncommitted work",
+  },
+  {
+    // rsync --delete* removes files the source lacks; --remove-source-files
+    // deletes the source as it copies.
+    pattern:
+      /\brsync\b[^|;&\n]*\s--(?:del\b|delete(?:-[a-z]+)?\b|remove-source-files\b)/,
+    why: "recursive delete",
+  },
+  {
+    pattern:
+      /\bgh\s+(?:repo\s+delete\b|api\b[^|;&\n]*\s(?:-X\s*|--method(?:=|\s+))['"]?DELETE\b)/i,
+    why: "deletes a GitHub repository or resource",
+  },
+  {
     // Forcing git rm deletes files with uncommitted changes.
     pattern: /\bgit\s+rm\b[^|;&\n]*\s(-[a-zA-Z]*f[a-zA-Z]*|--force)(?=\s|$)/,
     why: "deletes files with uncommitted changes",
-  },
-  {
-    // `git rm -r --cached` only untracks; without --cached it deletes.
-    pattern:
-      /\bgit\s+rm\b(?![^|;&\n]*--cached)[^|;&\n]*\s(?:-[a-zA-Z]*r[a-zA-Z]*|--recursive)(?=\s|$)/,
-    why: "recursive delete",
   },
   {
     pattern: /\bxargs\b[^|;&\n]*?\s(?:\S*\/)?(?:rm|rmdir|shred|unlink)(?=\s|$)/,
@@ -156,9 +171,41 @@ const HARD_DENY: Array<{
     why: "hides the command it runs",
   },
   {
+    // A shell handed a script that is computed at run time:
+    // `bash -c "$(git log -1 --format=%s)"`, `sh -c "$x"`, `sh -c \`…\``.
+    // (eval is judged by evalRunsComputed, which knows command position.)
+    pattern:
+      /\b(?:ba|z|da|k|fi)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*\s+["']?(?:\$[({A-Za-z_]|\x60)/,
+    why: "hides the command it runs",
+  },
+  {
+    // The same with the substitution anywhere in the script, after options
+    // (some taking a value: -o X, -O X, --rcfile X, --init-file X) or a
+    // `--`: `bash -o posix -c "true; $(…)"`, `sh -c -- "$(…)"`.
+    pattern:
+      /(?<![\w.-])(?:\S*\/)?(?:ba|z|da|k)?sh(?:\s+(?:-[oO]\s+\S+|--(?:rcfile|init-file)\s+\S+|--?[\w-]+|--))*?\s+-[a-zA-Z]*c[a-zA-Z]*(?:\s+(?:--?[\w-]+|--))*\s+(?:"(?:[^"\\]|\\.)*?(?:\$\(|\x60|<\()|'[^']*?(?:\$\(|\x60|<\()|\S*?(?:\$\(|\x60|<\())/,
+    why: "hides the command it runs",
+  },
+  {
+    // A script read from process substitution or a here-string with a
+    // substitution: `bash <(…)`, `sh < <(…)`, `bash 0< <(…)`,
+    // `bash -s <<< "$(…)"`, `source <(…)`.
+    pattern:
+      /(?:^|[\s;&|(])(?:(?:\S*\/)?(?:ba|z|da|k)?sh|source|\.)(?:\s+[^;&|\n<]*?)?\s+(?:\d?<\s*)?<\(|(?<![\w.-])(?:\S*\/)?(?:ba|z|da|k)?sh\b[^;&|\n]*?<<<\s*(?:"(?:[^"\\]|\\.)*?(?:\$\(|\x60)|\$\(|\x60)/,
+    why: "hides the command it runs",
+  },
+  {
+    // A commit message piped back into a shell, through a wrapper or not:
+    // `git log … | sh`, `| sudo sh`, `| env bash`, `| doas sh`.
+    pattern:
+      /\bgit\s+(?:log|show)\b[^;&\n]*\|\s*(?:(?:sudo|doas|env|command|exec|nice|nohup)\s+(?:-\S+\s+)*)*(?:\S*\/)?(?:ba|z|da|k)?sh\b/,
+    why: "hides the command it runs",
+  },
+  {
     // Configuration and programs supplied through the environment.
     pattern:
-      /(?<![\w$])GIT_(?:CONFIG\w*|DIR|EXEC_PATH|SSH(?:_COMMAND)?|EXTERNAL_DIFF|EDITOR|SEQUENCE_EDITOR|ASKPASS|PROXY_COMMAND|TEMPLATE_DIR)=/,
+      // An editor of `true` or `:` only accepts the message or todo list.
+      /(?<![\w$])GIT_(?:CONFIG\w*|DIR|EXEC_PATH|SSH(?:_COMMAND)?|EXTERNAL_DIFF|ASKPASS|PROXY_COMMAND|TEMPLATE_DIR|(?:SEQUENCE_)?EDITOR(?!=['"]?(?:true|:)['"]?(?:\s|$)))=/,
     why: "changes what git runs",
   },
   {
@@ -215,19 +262,6 @@ function spellings(raw: string): string[] {
   return [...forms];
 }
 
-/**
- * Commit messages, PR titles and bodies often name protected files ("add .env
- * to .gitignore"). Their quoted text is dropped before the mention checks.
- * Double-quoted text that could run a substitution is kept, so
- * `-m "$(cat .env)"` is still seen.
- */
-function withoutMessages(command: string): string {
-  return command.replace(
-    /(\s(?:-[a-zA-Z]*m|--message|--title|--body)(?:=|\s+))('[^']*'|"(?:[^"\\$\x60]|\\.)*")/g,
-    "$1''",
-  );
-}
-
 /** `echo .env >> .gitignore` names a secret file without reading it. */
 const IGNORE_FILE_APPEND =
   /^\s*(echo|printf)\s[^|;&<>`$]*>>?\s*(\S*\/)?\.(git|docker)ignore\s*$/i;
@@ -255,10 +289,16 @@ const ENV_DUMP = [
   /\bscript\b[^|;&\n]*\s(?:env|printenv|set|export|declare)(?=\s|$)/,
   /\$\{?[A-Za-z_]*(API_?KEY|TOKEN|SECRET|PASSW(OR)?D|PRIVATE_KEY|CREDENTIAL)/i,
   /\/proc\/\S*\/environ\b/,
+  // Indirect expansion reads a variable by a computed name: `${!n}`, and
+  // `${!A*}` lists names to read that way.
+  /\$\{!/,
   // Only inside an interpreter one-liner: code that mentions process.env is
   // ordinary, and grepping or editing it must keep working.
   /\b(node|nodejs|python3?|ruby|perl|deno|bun|php)\b[^|&\n]*\s(-e|-c|-p|-E|-r|--eval|--print)\b[^\n]*(\benv\b|environ|getenv|\bENV\b|%ENV|\$_ENV)/,
   /\bsecurity\s+(find|dump)-\w+/,
+  // jq's `env` builtin and `$ENV` are the environment as an object. The
+  // filter may hold a `|`, so the match runs to the end of the command.
+  /\bjq\b[^;&\n]*?(?:(?<![.\w$])env\b|\$ENV\b)/,
 ];
 
 /** Mentions of git internals or agent configuration inside a shell command. */
@@ -280,6 +320,7 @@ const CONFIG_MENTION = [
 function mentionsProtectedGlob(command: string): boolean {
   return command
     .split(SHELL_WORD_SPLIT)
+    .map(expandVariables)
     .filter((word) => /[?*[{]/.test(word))
     .some((word) => {
       if (hasDotLedWildcard(word)) return true;
@@ -368,7 +409,8 @@ function isReadOnly(command: string): boolean {
 const SECRET_COMMANDS = [
   /\bgh\s+auth\s+(?:token\b|status\b[^|;&\n]*\s(?:-t|--show-token)\b)/,
   /\bgit\s+credential(?:-[\w-]+)?\s+(?:fill|get)\b/,
-  // ripgrep skips hidden and ignored files unless told otherwise; .env is both.
+  // ripgrep skips hidden and ignored files unless told otherwise; .env is
+  // hidden, and ignored when .gitignore lists it (it usually does).
   // Allowed when the command excludes .env* itself.
   /\brg\b(?=[^|;&\n]*\s(-[a-zA-Z]*u[a-zA-Z]*|--no-ignore\S*|--hidden|-\.)(?=\s|$))(?![^|;&\n]*(-g|--glob)[\s=]*["']?!\.env)/,
 ];
@@ -381,6 +423,20 @@ const READS_SUBSTITUTION =
   /(?:^|[;&|(\n]\s*|\s)(?:cat|head|tail|less|more|bat|nl|tac|grep|egrep|fgrep|rg|ag|sed|awk|cut|sort|uniq|xxd|od|hexdump|strings|base64|cp|scp)\b[^|;&\n]*[\s=<](?:\$\(|\x60)/;
 
 const SHELL_WORD_SPLIT = /[\s|;&()<>=\x60]+/;
+
+const VARIABLE = /\$(?:\{[A-Za-z_][\w]*\}|[A-Za-z_]\w*|[0-9@*#?])/g;
+
+/**
+ * A word with its variables replaced by `*`, then dequoted: `"$f"v` becomes
+ * `*v`, `CLA"$u"DE.md` becomes `CLA*DE.md`, so the glob checks see every
+ * name the word could spell. A word that is only a variable (`"$FILE"`) is
+ * returned as it was: it names nothing the checks can judge.
+ */
+function expandVariables(word: string): string {
+  if (!word.includes("$")) return word;
+  const expanded = dequote(word.replace(VARIABLE, "*"));
+  return /^\**$/.test(expanded) ? word : expanded;
+}
 
 /**
  * True when a word of the command reaches a secret: a wildcard that could
@@ -395,15 +451,29 @@ function wordsReachSecret(command: string, cwd: string | undefined): boolean {
       const words = segment.split(SHELL_WORD_SPLIT).filter(Boolean);
       // These print names, not contents: `ls -d .*` lists, it does not read.
       if (NAME_ONLY.has(words[0] ?? "")) return false;
-      return words.some((word) => {
+      return words.some((spelled) => {
+        const word = expandVariables(spelled);
         if (/[?*[{]/.test(word)) return isSecretWord(word);
-        if (cwd === undefined || word.startsWith("-") || word.includes("$")) {
-          return false;
+        if (cwd === undefined || word.includes("$")) return false;
+        if (word.startsWith("-")) {
+          // `-Fpath` / `-Fmpath` (git commit -F, -t; grep -f…): a clustered
+          // option that takes a file takes the rest of the word as its path.
+          const cluster = /^-([a-zA-Z]*?)([Ftf])(.+)$/.exec(word);
+          return (
+            cluster !== null &&
+            !/[mCce]/.test(cluster[1]!) &&
+            isSecretPath(cwd, cluster[3]!)
+          );
         }
         try {
           lstatSync(resolve(cwd, word));
-        } catch {
-          return false;
+        } catch (error) {
+          // Not a path. Anything else (EACCES) means the word cannot be
+          // checked, and the caller turns the throw into a deny.
+          if (NOT_A_PATH.has((error as NodeJS.ErrnoException).code ?? "")) {
+            return false;
+          }
+          throw error;
         }
         return isSecretPath(cwd, word);
       });
@@ -412,11 +482,15 @@ function wordsReachSecret(command: string, cwd: string | undefined): boolean {
 
 const NAME_ONLY = new Set(["ls", "echo", "printf", "tree", "du", "stat"]);
 
+/** lstat errors that mean a word names no file, rather than one that cannot be checked. */
+const NOT_A_PATH = new Set(["ENOENT", "ENOTDIR", "ENAMETOOLONG", "EINVAL"]);
+
 /**
  * A recursive grep ignores .gitignore, so one rooted at the project (or with
  * no path, which means the current directory), a parent, or an absolute path
- * reaches .env. One confined to subdirectories such as src does not, and
- * neither does one that excludes .env* itself.
+ * reaches .env. One confined to a subdirectory such as src is allowed, though
+ * it still reads any secret file inside that subdirectory; so is one that
+ * excludes .env* itself.
  */
 function recursiveGrepReachesSecrets(command: string): boolean {
   return command
@@ -472,6 +546,77 @@ function checkoutDiscards(command: string, cwd: string | undefined): boolean {
     });
 }
 
+/** Quoted spans blanked to the same length, so their text is neither a command nor a separator. */
+function maskQuotes(command: string): string {
+  return command.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, (q) => "x".repeat(q.length));
+}
+
+/** A command position in quote-masked text: after a separator or opener, or a wrapper. */
+const MASKED_AT = String.raw`(?:^|[;&|(){\n]\s*|(?<![\w./-])(?:sudo|command|builtin|exec|then|do|else|!)\s+)`;
+
+/**
+ * `eval` in command position whose arguments, up to the end of its simple
+ * command, hold a substitution or a variable: `eval "true; $(…)"`,
+ * `eval echo $(id)`. A quoted "eval" is text (`echo 'never use eval'`).
+ */
+function evalRunsComputed(command: string): boolean {
+  const masked = maskQuotes(command);
+  const at = new RegExp(String.raw`${MASKED_AT}eval(?=\s|$)`, "g");
+  for (const match of masked.matchAll(at)) {
+    const start = match.index + match[0].length;
+    const rest = masked.slice(start);
+    const end = rest.search(/[;&|\n]/);
+    const args = command.slice(start, end === -1 ? undefined : start + end);
+    if (/\$\(|\$\{?[A-Za-z_]|\x60|<\(/.test(args)) return true;
+  }
+  return false;
+}
+
+/**
+ * A command substitution as the command itself: `$(git log -1 --format=%s)`
+ * or `` `…` `` at the start of a command runs whatever it prints. Quoted
+ * text is masked first, except a double-quoted span that starts with the
+ * substitution (`"$(…)"`), which runs just the same. `$((…))` is arithmetic.
+ * The same substitution as a directory (`$(git log -1 --format=%s)/x`)
+ * still runs a computed program; that stays a known gap.
+ */
+function substitutionRunsAsCommand(command: string): boolean {
+  const masked = command
+    // A substitution that only computes a directory runs the program under
+    // it, a path the patterns still see: `$(npm bin)/tsc`.
+    .replace(/\$\([^()]*\)(?=\/)|\x60[^\x60]*\x60(?=\/)/g, "x")
+    .replace(/'[^']*'/g, (q) => "x".repeat(q.length))
+    .replace(/"(?:[^"\\]|\\.)*"/g, (q) =>
+      /^"(?:\$\((?!\()|\x60)/.test(q) ? `$(${"x".repeat(q.length - 2)}` : "x".repeat(q.length),
+    );
+  return new RegExp(String.raw`${MASKED_AT}(?:\$\((?!\()|\x60)`).test(masked);
+}
+
+/**
+ * `git rm -r` without `--cached` deletes the files. The words are read as
+ * git sees them (quotes removed, a `#` word ends the command), and only
+ * options before `--` count: after it, `--cached` is a path.
+ */
+function gitRmDeletes(command: string): boolean {
+  const scan = (text: string) =>
+    [...text.matchAll(/(?<![\w.-])git\s+rm(?=\s|$)/g)].some((match) => {
+      const words = shellWords(text.slice(match.index + match[0].length));
+      const end = words.indexOf("--");
+      const options = (end === -1 ? words : words.slice(0, end)).filter((w) =>
+        w.startsWith("-"),
+      );
+      return (
+        options.some((w) => /^(-[a-zA-Z]*r[a-zA-Z]*|--recursive)$/.test(w)) &&
+        !options.includes("--cached")
+      );
+    });
+  const normalized = normalizeGit(expandLongOptions(command));
+  // A quoted command name (`g'it' rm`) is only seen once dequoted.
+  return /(?<![\w.-])git\s+rm(?=\s|$)/.test(normalized)
+    ? scan(normalized)
+    : scan(normalizeGit(expandLongOptions(dequote(command))));
+}
+
 /**
  * Why a Bash command is refused, or null. `cwd` lets words that name files
  * be resolved through symlinks; without it (the allowlist's use) only the
@@ -480,6 +625,10 @@ function checkoutDiscards(command: string, cwd: string | undefined): boolean {
 export function bashDenyReason(command: string, cwd?: string): string | null {
   // bash deletes a backslash-newline, joining the words on either side.
   const raw = command.replace(/\\\r?\n/g, "");
+  // Commit and PR messages are screened like any other text: stripping them
+  // was a source of bypasses three rounds running. Write a message that
+  // names a blocked command to a file and use `git commit -F <file>`.
+  const mentions = withoutExclusions(raw);
   const forms = spellings(raw);
   const normalized = forms.map(normalizeGit);
   const why =
@@ -488,6 +637,14 @@ export function bashDenyReason(command: string, cwd?: string): string | null {
         rule.pattern.test(form),
       ),
     )?.why ??
+    (gitRmDeletes(raw) ? "recursive delete" : undefined) ??
+    // Raw text only: dequoting would turn quoted prose into commands. A
+    // quoted `e''val` is caught by spelling it dequoted when raw has none.
+    (evalRunsComputed(raw) ||
+    (!/(?<![\w.-])eval\b/.test(maskQuotes(raw)) && evalRunsComputed(dequote(raw))) ||
+    substitutionRunsAsCommand(raw)
+      ? "hides the command it runs"
+      : undefined) ??
     (normalized.some((form) => checkoutDiscards(form, cwd))
       ? "git checkout with a path discards uncommitted changes"
       : undefined) ??
@@ -498,7 +655,6 @@ export function bashDenyReason(command: string, cwd?: string): string | null {
   if (why) {
     return `Blocked by the team's safety policy (${why}). If this is genuinely required, ask the human operator to run it directly.`;
   }
-  const mentions = withoutExclusions(withoutMessages(raw));
   const mentionForms = [mentions, dequote(mentions)];
   if (
     (!IGNORE_FILE_APPEND.test(mentions) &&

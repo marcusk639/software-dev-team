@@ -20,6 +20,9 @@ export const BUILT_IN_AGENTS: readonly string[] = [
   "comment-thread-analyst",
 ];
 
+/** Role names the ledger writes itself (see ledger.ts), compared ignoring case. */
+const RESERVED_NAMES: readonly string[] = ["manager", "unknown"];
+
 /** An agent the target repo defines in `.claude/agents`. */
 export interface ProjectAgent {
   readonly name: string;
@@ -38,9 +41,10 @@ const VALID_NAME = /^[A-Za-z0-9][\w-]*$/;
  * The agents the target repo defines in `.claude/agents`. They load with
  * settingSources: ["project"], and the team may delegate to them; the
  * built-in agents stay off limits. A file is skipped, with a warning, when
- * it has no frontmatter name, when its name is a built-in agent or a team
- * role, when it repeats another file's name, or when it is a symlink that
- * leaves `.claude/agents` or cannot be resolved.
+ * it has no frontmatter name, when its name is a built-in agent, a team
+ * role or reserved, when it repeats another file's name, when it cannot be
+ * read, or when it is a symlink that leaves `.claude/agents` or cannot be
+ * resolved.
  */
 export function loadProjectAgents(cwd: string): {
   agents: ProjectAgent[];
@@ -83,10 +87,18 @@ export function loadProjectAgents(cwd: string): {
       skip("it is a symlink to a file outside .claude/agents.");
       continue;
     }
-    // A directory named like an agent file.
-    if (!statSync(file).isFile()) continue;
+    let text: string;
+    try {
+      // A directory named like an agent file.
+      if (!statSync(file).isFile()) continue;
+      text = readFileSync(file, "utf8");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      skip(`it cannot be read (${code ?? (error as Error).message}).`);
+      continue;
+    }
 
-    const frontmatter = FRONTMATTER.exec(readFileSync(file, "utf8"))?.[1];
+    const frontmatter = FRONTMATTER.exec(text)?.[1];
     if (frontmatter === undefined) {
       skip("it has no frontmatter (--- name: … ---).");
       continue;
@@ -103,6 +115,10 @@ export function loadProjectAgents(cwd: string): {
     const key = name.toLowerCase();
     if (builtIns.has(key)) {
       skip(`"${name}" is a built-in agent, which the team does not use.`);
+      continue;
+    }
+    if (RESERVED_NAMES.includes(key)) {
+      skip(`"${name}" is reserved: the ledger uses it for the manager's own calls and for calls it never saw start.`);
       continue;
     }
     if (roles.has(key)) {

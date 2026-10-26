@@ -132,3 +132,42 @@ describe("loadProjectAgents: rejected definitions (I6)", () => {
     );
   });
 });
+
+describe("loadProjectAgents: names and files it must not trust", () => {
+  it("rejects a team role spelled in another case", () => {
+    const { cwd, dir } = project();
+    writeFileSync(join(dir, "qa.md"), "---\nname: QA-Tester\n---\n");
+    const { agents, warnings } = loadProjectAgents(cwd);
+    assert.deepEqual(agents, []);
+    assert.match(warnings.join("\n"), /"QA-Tester" is a team role/);
+  });
+
+  for (const name of ["manager", "Unknown"]) {
+    it(`reserves ${name}, which the ledger uses for its own rows`, () => {
+      const { cwd, dir } = project();
+      writeFileSync(join(dir, "x.md"), `---\nname: ${name}\n---\n`);
+      const { agents, warnings } = loadProjectAgents(cwd);
+      assert.deepEqual(agents, []);
+      assert.match(warnings.join("\n"), /reserved/);
+    });
+  }
+
+  it("warns about an unreadable file and keeps loading the rest", () => {
+    const { cwd, dir } = project();
+    writeFileSync(join(dir, "locked.md"), "---\nname: locked\n---\n", { mode: 0o000 });
+    writeFileSync(join(dir, "ok.md"), "---\nname: ok-agent\n---\n");
+    const { agents, warnings } = loadProjectAgents(cwd);
+    assert.deepEqual(agents.map((a) => a.name), ["ok-agent"]);
+    assert.match(warnings.join("\n"), /locked\.md is ignored: it cannot be read \(EACCES/);
+  });
+
+  it("reads a quoted model with a trailing comment", () => {
+    const { cwd, dir } = project();
+    writeFileSync(join(dir, "a.md"), "---\nname: a1\nmodel: \"sonnet\"  # pinned\n---\n");
+    writeFileSync(join(dir, "b.md"), "---\nname: b1\nmodel: 'claude-opus-4-1' # x\n---\n");
+    assert.deepEqual(loadProjectAgents(cwd).agents, [
+      { name: "a1", model: "sonnet" },
+      { name: "b1", model: "claude-opus-4-1" },
+    ]);
+  });
+});

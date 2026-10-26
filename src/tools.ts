@@ -52,5 +52,12 @@ export const MANAGER_ALLOWED = [
   "ToolSearch",
 ] as const satisfies readonly ToolName[];
 
-export const isOneOf = (list: readonly string[], name: string): boolean =>
-  list.includes(name);
+/** True when `name` is on `list`, narrowing it to the list's names. */
+export const isOneOf = <T extends string>(
+  list: readonly T[],
+  name: string,
+): name is T => (list as readonly string[]).includes(name);
+
+/** True for a plain object, the only shape a tool input may have. */
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);

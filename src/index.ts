@@ -1,9 +1,5 @@
 #!/usr/bin/env node
-import {
-  allowRuleWarnings,
-  DEFAULT_ALLOWED_TOOLS,
-  resolveAllowedTools,
-} from "./allowlist.js";
+import { DEFAULT_ALLOWED_TOOLS, prepareAllowRules } from "./allowlist.js";
 import { checkProjectDir, type ParsedArgs, parseArgs, usage } from "./cli.js";
 import { runOutcome } from "./outcome.js";
 import { createRenderer } from "./render.js";
@@ -24,17 +20,12 @@ async function main(): Promise<number> {
   let cli: ParsedArgs;
   try {
     cli = parseArgs(process.argv.slice(2));
-    // Validated now so a bad --allow rule is a usage error, not a failure mid-run.
-    if (cli.kind === "run") {
-      resolveAllowedTools(DEFAULT_ALLOWED_TOOLS, cli.allow);
-      for (const warning of allowRuleWarnings([
-        ...DEFAULT_ALLOWED_TOOLS,
-        ...cli.allow,
-      ])) {
-        console.error(`${DIM}${warning}${RESET}`);
-      }
-    }
     if (cli.kind !== "help") checkProjectDir(cli.cwd);
+    // Validated now so a bad --allow rule is a usage error, not a failure
+    // mid-run. Its warnings are printed by runTeam, with the run's others.
+    if (cli.kind === "run") {
+      prepareAllowRules(DEFAULT_ALLOWED_TOOLS, cli.allow, { cwd: cli.cwd });
+    }
   } catch (error) {
     console.error(`${(error as Error).message}\n\n${usage()}`);
     return 2;
@@ -114,6 +105,12 @@ async function main(): Promise<number> {
 
   if (summary.ledgerText) {
     console.log(`\n${DIM}What actually ran in this run:\n${summary.ledgerText}${RESET}`);
+  }
+  // Repeated here, next to the ledger, so they are not lost in the scrollback.
+  if (summary.warnings.length > 0) {
+    console.error(
+      `\nConfiguration warnings for this run:\n${summary.warnings.map((w) => `- ${w}`).join("\n")}`,
+    );
   }
 
   const outcome = runOutcome(summary, cli.strict);

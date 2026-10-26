@@ -92,3 +92,67 @@ describe("red then green: a failure a later run of the same command fixed", () =
     }
   });
 });
+
+describe("I7: a degraded ledger and configuration warnings need a check", () => {
+  it("trips --strict, with its own warning line, when the ledger missed events", () => {
+    const outcome = runOutcome(
+      { isError: false, ledger: [entry("ok")], ledgerFaults: 2, warnings: [] },
+      true,
+    );
+    assert.equal(outcome.code, 3);
+    assert.match(outcome.warning ?? "", /failed to record 2 hook events or messages/);
+  });
+
+  it("trips --strict when the run printed configuration warnings", () => {
+    const outcome = runOutcome(
+      {
+        isError: false,
+        ledger: [entry("ok")],
+        ledgerFaults: 0,
+        warnings: ["Project agent x.md is ignored: …"],
+      },
+      true,
+    );
+    assert.equal(outcome.code, 3);
+    assert.match(outcome.warning ?? "", /1 configuration warning/);
+  });
+
+  it("warns without --strict and exits 0", () => {
+    const outcome = runOutcome(
+      { isError: false, ledger: [], ledgerFaults: 1, warnings: ["w"] },
+      false,
+    );
+    assert.equal(outcome.code, 0);
+    assert.match(outcome.warning ?? "", /failed to record 1 hook event/);
+    assert.match(outcome.warning ?? "", /1 configuration warning/);
+  });
+});
+
+describe("re-review 3: only warnings that changed what the team can do trip --strict", () => {
+  it("does not count informational notices", () => {
+    const outcome = runOutcome(
+      {
+        isError: false,
+        ledger: [entry("ok")],
+        warnings: [],
+        notices: ['Allow rule "Bash(git push:*)" also matches … stay blocked'],
+      },
+      true,
+    );
+    assert.equal(outcome.code, 0);
+    assert.equal(outcome.warning, undefined);
+  });
+
+  it("still counts a rejected project agent", () => {
+    const outcome = runOutcome(
+      {
+        isError: false,
+        ledger: [entry("ok")],
+        warnings: ["Project agent gp.md is ignored: …"],
+        notices: ["x"],
+      },
+      true,
+    );
+    assert.equal(outcome.code, 3);
+  });
+});

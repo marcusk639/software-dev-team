@@ -34,20 +34,31 @@ Options
   --file <path>       read the task from a file instead of the command line
   -y, --yes           run unattended: file edits inside --cwd and the commands
                       acceptEdits approves (mkdir, touch, rm, rmdir, mv, cp,
-                      sed) run without asking; other Bash not allowed by
-                      --allow is refused. The safety hook still screens all
-                      of it, rm, rmdir and sed included.
+                      sed) run without asking, as do calls --allow or the
+                      project's .claude/settings.json allows; other Bash,
+                      WebFetch, WebSearch and MCP calls are refused, and reads
+                      outside --cwd are denied. The safety hook still screens
+                      all of it, rm, rmdir and sed included.
   --allow <rule>      let a tool run without approval, e.g. "Bash(pnpm test:*)";
-                      repeatable. A rule must name what it allows: bare Bash,
-                      Write, Edit, MultiEdit or NotebookEdit, or a wildcard-only
-                      specifier such as Bash(*), is rejected.
+                      repeatable. "Read(//abs/dir/**)" opens a directory
+                      outside --cwd to reads ("//" is absolute, "~/" is home,
+                      "/" and bare paths are relative to --cwd). Rejected:
+                      bare Bash, Write, Edit, MultiEdit or NotebookEdit; a
+                      wildcard-only specifier such as Bash(*); a write rule
+                      for the whole filesystem; a Bash rule the safety policy
+                      always blocks; and a read rule for /, the home directory,
+                      a parent of --cwd, or one level (dir/*) outside it.
   --resume <id>       continue the session printed at the end of an earlier run,
                       with the same --cwd
   --verbose           show tool results, not just tool calls
   --strict            exit 3 when the ledger records failed, blocked, refused,
-                      background or unfinished calls; a failure that a later
-                      run of the same command passed does not count (a
-                      warning is always printed)
+                      background or unfinished calls, when the ledger missed
+                      events, or when a project agent or allow rule was
+                      rejected or has no effect;
+                      a Bash failure that a later run of the same command by
+                      the same agent passed does not count. The warning is
+                      printed when something needs attention, with or without
+                      --strict
   --max-turns <n>     cap the manager's agentic turns (default 60; each
                       specialist has its own cap)
   --max-budget <usd>  stop the run once its estimated cost, specialists

