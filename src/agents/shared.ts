@@ -36,3 +36,12 @@ export const ADVISORY_MAX_TURNS = 30;
 export const IMPLEMENTER_MAX_TURNS = 60;
 
 export const advisory = (tools: readonly string[] = READ_ONLY) => [...tools];
+
+/**
+ * The plugin shipped in this repo (plugin/), loaded into every run. Roles
+ * preload its skills by `<name>:<skill>` instead of repeating a method in
+ * their prompts. It travels with the repo, so a Docker image gets it with
+ * the rest of the source.
+ */
+export const TEAM_PLUGIN_NAME = "dev-team";
+export const TEAM_PLUGIN_DIR = new URL("../../plugin/", import.meta.url);

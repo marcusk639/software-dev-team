@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { DEFAULT_ALLOWED_TOOLS, resolveAllowedTools } from "../allowlist.js";
@@ -22,7 +23,13 @@ import {
   renderPrompt,
   withAppended,
 } from "../prompts.js";
-import { AGENTS, loadTeam, ROLES, TEAM_CONVENTIONS } from "../team.js";
+import {
+  AGENTS,
+  loadTeam,
+  ROLES,
+  TEAM_CONVENTIONS,
+  TEAM_PLUGIN_DIR,
+} from "../team.js";
 
 /** The name a project uses to customize the manager's prompt. */
 export const ORCHESTRATOR = "orchestrator";
@@ -131,6 +138,8 @@ export async function runTeam(options: RunOptions): Promise<RunSummary> {
     // verified against a target declaring allow:["Bash"] — but its hooks are
     // its own code. Point --cwd at repos you trust.
     settingSources: ["project"],
+    // The team plugin carries the skills roles preload (e.g. code-review).
+    plugins: [{ type: "local", path: fileURLToPath(TEAM_PLUGIN_DIR) }],
     // Takes general-purpose, Explore, Plan and the other built-in agents off
     // the manager's menu while keeping the team and the target's own agents.
     // Undocumented in sdk.d.ts; verified against 0.3.283. The delegation rule

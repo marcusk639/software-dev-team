@@ -1,8 +1,11 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { loadOrchestratorPrompt } from "./orchestrator/index.js";
 import { promptSections } from "./prompts.js";
-import { loadTeam, ROLES } from "./team.js";
+import { loadTeam, ROLES, TEAM_PLUGIN_DIR, TEAM_PLUGIN_NAME } from "./team.js";
 
 describe("loadTeam", () => {
   it("loads every built-in prompt unchanged when the project customizes nothing", () => {
@@ -145,16 +148,49 @@ describe("code-reviewer", () => {
     }
   });
 
-  it("has the review rubric as sections a project can override", () => {
+  it("keeps its own role, output and self-check in the prompt", () => {
     const sections = promptSections(loadTeam()["code-reviewer"].prompt);
-    for (const required of ["role", "approach", "rating", "re_review", "output_format", "verification"]) {
+    for (const required of ["role", "output_format", "verification"]) {
       assert.ok(sections.includes(required), `code-reviewer lacks <${required}>`);
     }
+  });
+
+  it("preloads the review method from the team plugin instead of repeating it", () => {
+    const reviewer = loadTeam()["code-reviewer"];
+    assert.deepEqual(reviewer.skills, [`${TEAM_PLUGIN_NAME}:code-review`]);
+    assert.doesNotMatch(reviewer.prompt, /lowest score × 10/);
   });
 
   it("is part of the manager's review loop", () => {
     const prompt = loadOrchestratorPrompt();
     assert.match(prompt, /- code-reviewer: /);
     assert.match(prompt, /<workflow>[\s\S]*code-reviewer[\s\S]*<\/workflow>/);
+  });
+});
+
+describe("team plugin", () => {
+  const dir = fileURLToPath(TEAM_PLUGIN_DIR);
+
+  it("has a manifest whose name matches the skill prefix the roles use", () => {
+    const manifest = JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8")) as { name: string };
+    assert.equal(manifest.name, TEAM_PLUGIN_NAME);
+  });
+
+  it("ships every skill a role preloads, under the name the role uses", () => {
+    for (const role of ROLES) {
+      for (const skill of loadTeam()[role].skills ?? []) {
+        const [plugin, name = ""] = skill.split(":");
+        assert.equal(plugin, TEAM_PLUGIN_NAME, `${role} preloads ${skill} from another plugin`);
+        const text = readFileSync(join(dir, "skills", name, "SKILL.md"), "utf8");
+        assert.match(text, new RegExp(`^---\\nname: ${name}\\ndescription: .+\\n---\\n`), `${skill} frontmatter`);
+      }
+    }
+  });
+
+  it("keeps the review rubric in the code-review skill", () => {
+    const text = readFileSync(join(dir, "skills", "code-review", "SKILL.md"), "utf8");
+    for (const part of ["CRITICAL", "confidence", "85", "lowest score", "re-review"]) {
+      assert.match(text, new RegExp(part, "i"), `code-review skill lacks ${part}`);
+    }
   });
 });

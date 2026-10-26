@@ -11,6 +11,7 @@ import { agent as productManager } from "./agents/product-manager/index.js";
 import { agent as qaTester } from "./agents/qa-tester/index.js";
 import { agent as uxDesigner } from "./agents/ux-designer/index.js";
 import type { AgentSpec } from "./agents/shared.js";
+export { TEAM_PLUGIN_DIR, TEAM_PLUGIN_NAME } from "./agents/shared.js";
 import {
   applyCustomization,
   customizeBody,
