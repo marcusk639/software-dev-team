@@ -163,7 +163,7 @@ Adopted from RP §7.7 through the kit: the sticky summary with its hidden ledger
 
 - `## Promises touched` replaces "Features touched".
 - `## Cross-artifact impact` replaces "Cross-package impact".
-- `## Loosenings` is added (change, declared, where).
+- `## Loosenings` is added. It lists only loosenings the PR text declares, by rule family, plus a count of undeclared ones. Each undeclared loosening is filed as a security finding (pointer and private advisory only) and never listed with its location.
 - The inline cap is 5.
 
 ### 7.8 Learning from Marcus's feedback
