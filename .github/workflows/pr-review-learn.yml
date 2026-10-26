@@ -35,7 +35,7 @@ jobs:
           persist-credentials: false
 
       - name: Learn
-        uses: marcusk639/pr-review-kit/actions/learn@7cc0b4a84a12933c6df0e959bc6e80066275bbf4
+        uses: marcusk639/pr-review-kit/actions/learn@9e21ba2605bc083749b1bec176989dbfbda7b6d0
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
@@ -56,4 +56,4 @@ jobs:
           persist-credentials: false
 
       - name: Propose
-        uses: marcusk639/pr-review-kit/actions/propose@7cc0b4a84a12933c6df0e959bc6e80066275bbf4
+        uses: marcusk639/pr-review-kit/actions/propose@9e21ba2605bc083749b1bec176989dbfbda7b6d0
