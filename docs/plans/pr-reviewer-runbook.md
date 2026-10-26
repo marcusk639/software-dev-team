@@ -12,9 +12,9 @@ Repo: `marcusk639/software-dev-team` (public, default branch `main`). Local bran
 - [ ] Run `actionlint .github/workflows/pr-review*.yml`. Expect no output.
 - [ ] `marcusk639/pr-review-kit` is pushed and public, and the pinned SHA exists on GitHub.
 
-- [x] Both workflows are pinned to kit `fb07975fc921e046cbc89829c6392c096ee48b12` (P0.1, P1 and P2, on top of the P0 security properties in `be671da`). (Superseded by the P0.2 precondition below.)
+- [x] Both workflows are pinned to kit `7cc0b4a84a12933c6df0e959bc6e80066275bbf4` (P0.2, which includes P0, P0.1, P1 and P2). Don't merge a pin older than P0.2.
 - [x] **The kit's P0.1 release is pinned. This is not the final precondition: see P0.2 below.** Project checks run isolated (no `GH_TOKEN`, empty cwd, kill timeout), with `ctx.git` and `ctx.mergeBase`. Re-verified at `fb07975`: `validate`, `actionlint`, the check tests and the five historical dry runs all pass, and the learning workflow checks out the default branch.
-- [ ] **Re-pin both workflows to the kit's P0.2 release before enabling the reviewer. This is the final engine precondition.** P0.2 fixes two High issues from the engine's re-review: the learning-PR bot identity could be spoofed through the git author name, and withheld globs were silently dropped. It also fixes four Medium issues. After re-pinning, re-run `validate`, `actionlint`, the check tests and the five historical dry runs. Don't merge a pin older than P0.2.
+- [x] **Re-pinned to the kit's P0.2 release (`7cc0b4a`), the final engine precondition.** Re-verified at this pin: `validate` ok, `actionlint` clean, 40/40 check tests, the five historical dry runs unchanged, and the planted-security render leaks nothing. P0.2 fixes two High issues from the engine's re-review: the learning-PR bot identity could be spoofed through the git author name, and withheld globs were silently dropped. It also fixes four Medium issues. After re-pinning, re-run `validate`, `actionlint`, the check tests and the five historical dry runs. Don't merge a pin older than P0.2.
 
 ## Standing rule: the workflow is editable by any PR
 
