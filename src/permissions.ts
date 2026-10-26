@@ -225,7 +225,7 @@ export function denyReason(
     if (
       toolName === "Grep" &&
       input.output_mode === "content" &&
-      !resolvesInside(policy.cwd, policy.readRoots, asString(input.path))
+      !resolvesInside(policy.cwd, policy.readRoots, fromHome(asString(input.path)))
     ) {
       return "Printing search results from outside the project is not permitted: Grep searches hidden files, credentials included. Search inside the project, or ask the human operator.";
     }
@@ -276,10 +276,18 @@ function globBase(glob: string, base: string): string {
   const segments = glob.split("/");
   const wild = segments.findIndex((s) => /[?*[{]/.test(s));
   const fixed = (wild === -1 ? segments : segments.slice(0, wild)).join("/");
-  if (fixed === "~" || fixed.startsWith("~/")) {
-    return resolve(homedir(), `.${fixed.slice(1)}`);
-  }
-  return resolve(base, fixed || (glob.startsWith("/") ? "/" : "."));
+  return resolve(base, fromHome(fixed) || (glob.startsWith("/") ? "/" : "."));
+}
+
+/**
+ * `~` and `~/…` as the home directory, the way a shell (and possibly the
+ * tool) reads them; anything else unchanged. Treating `~` as a literal
+ * directory under --cwd would wrongly count it as inside the project.
+ */
+function fromHome(path: string): string {
+  return path === "~" || path.startsWith("~/")
+    ? resolve(homedir(), `.${path.slice(1)}`)
+    : path;
 }
 
 /**
@@ -292,8 +300,8 @@ function readTargets(
   toolName: string,
   input: Record<string, unknown>,
 ): string[] {
-  if (toolName === "Read") return [targetPath(input)];
-  const path = asString(input.path);
+  if (toolName === "Read") return [fromHome(targetPath(input))];
+  const path = fromHome(asString(input.path));
   const searchRoot = resolve(policy.cwd, path || ".");
   if (toolName === "Glob") {
     return [path, globBase(asString(input.pattern), searchRoot)];

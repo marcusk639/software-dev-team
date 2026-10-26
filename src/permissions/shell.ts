@@ -24,9 +24,9 @@ import {
 
 /**
  * Wrappers that run the command after them: `sudo env`, `nice -n 5 env`,
- * `bash -c env`, `! env`. Their options and numeric arguments are skipped.
+ * `bash -c env`, `sh -cm env`, `! env`. Their options and numeric arguments are skipped.
  */
-const WRAPPER = String.raw`(?:sudo|doas|time|command|builtin|exec|nohup|nice|eval|stdbuf|xargs|watch|timeout|then|do|else|!|(?:ba|z|da|k|fi)?sh\s+-c)`;
+const WRAPPER = String.raw`(?:sudo|doas|time|command|builtin|exec|nohup|nice|eval|stdbuf|xargs|watch|timeout|then|do|else|!|(?:ba|z|da|k|fi)?sh\s+-[a-zA-Z]*c[a-zA-Z]*)`;
 /**
  * A command position: the start, after a shell separator or keyword, or after
  * a wrapper. `cd env` and `docker ps` are arguments, not commands.
@@ -160,7 +160,8 @@ const HARD_DENY: Array<{
   {
     // `git rm -r --cached` only untracks; without --cached it deletes.
     pattern:
-      /\bgit\s+rm\b(?![^|;&\n]*--cached)[^|;&\n]*\s(?:-[a-zA-Z]*r[a-zA-Z]*|--recursive)(?=\s|$)/,
+      // --cached counts only as an option: not after `--` (a path) or in a comment.
+      /\bgit\s+rm\b(?!(?:(?!\s(?:--(?=\s|$)|#))[^|;&\n])*\s--cached(?=\s|$))[^|;&\n]*\s(?:-[a-zA-Z]*r[a-zA-Z]*|--recursive)(?=\s|$)/,
     why: "recursive delete",
   },
   {
@@ -173,6 +174,13 @@ const HARD_DENY: Array<{
     pattern: new RegExp(
       String.raw`\$'|\$\{?IFS\b|${AT}${ASSIGNMENTS}\$\{?[A-Za-z_@*0-9]`,
     ),
+    why: "hides the command it runs",
+  },
+  {
+    // A shell or eval handed a script that is computed at run time:
+    // `bash -c "$(git log -1 --format=%s)"`, `eval "$x"`, `sh -c \`…\``.
+    pattern:
+      /(?:\b(?:ba|z|da|k|fi)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c[a-zA-Z]*|\beval)\s+["']?(?:\$[({A-Za-z_]|\x60)/,
     why: "hides the command it runs",
   },
   {
@@ -252,11 +260,24 @@ const MESSAGE_COMMANDS: ReadonlyArray<{ head: RegExp; flags: string }> = [
 ];
 
 /**
- * A message value whose text cannot run anything: single-quoted, double-quoted
- * with no `$` or backtick, or the `"$(cat <<'EOF' … EOF)"` form whose quoted
+ * A message value whose text cannot run anything: single-quoted (literal;
+ * single quotes nested in a double-quoted string, which would expand them,
+ * are masked by withoutMessages and never reach this), double-quoted with no
+ * `$` or backtick, or the `"$(cat <<'EOF' … EOF)"` form whose quoted
  * delimiter turns expansion off.
  */
 const MESSAGE_VALUE = String.raw`(?:'[^']*'|"(?:[^"\\$\x60]|\\.)*"|"\$\(\s*cat\s+<<-?\s*(['"])(\w+)\2[ \t]*\n[\s\S]*?\n[ \t]*\3[ \t]*\n?\s*\)")`;
+
+/** Characters after which a new command starts: separators and nesting openers. */
+const SEGMENT_STARTS = [";", "&", "|", "\n", "(", "{", "\x60"];
+
+/** True when the end of `masked` lies inside `$(…)`, `<(…)`, `(…)`, `{…}` or backticks. */
+function insideNesting(masked: string): boolean {
+  const opened = (masked.match(/[({]/g) ?? []).length;
+  const closed = (masked.match(/[)}]/g) ?? []).length;
+  const ticks = (masked.match(/\x60/g) ?? []).length;
+  return opened > closed || ticks % 2 === 1;
+}
 
 /** Quoted text blanked to the same length, so a `;` inside a message is not a separator. */
 function maskQuotes(command: string): string {
@@ -282,8 +303,11 @@ function withoutMessages(command: string): string {
     out = out.replace(option, (match, prefix: string, ...rest) => {
       const offset = rest[rest.length - 2] as number;
       const before = masked.slice(0, offset);
+      // Inside a substitution or subshell the option may belong to a nested
+      // shell (`git commit $(sh -cm '…')`), so nothing there is stripped.
+      if (insideNesting(before)) return match;
       const segment = before.slice(
-        Math.max(...[";", "&", "|", "\n"].map((sep) => before.lastIndexOf(sep))) + 1,
+        Math.max(...SEGMENT_STARTS.map((sep) => before.lastIndexOf(sep))) + 1,
       );
       return head.test(segment) ? `${prefix}''` : match;
     });

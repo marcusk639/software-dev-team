@@ -373,3 +373,62 @@ describe("jq's env builtin prints the environment", () => {
   ]);
   allows([bash("jq .version package.json"), bash("jq '.scripts.test' package.json")]);
 });
+
+describe("re-review 1: a nested shell's -cm is not a message", () => {
+  denies(SAFETY("recursive delete"), [
+    bash("git commit $(sh -cm 'rm -rf src')"),
+    bash("git commit `sh -cm 'rm -rf src'`"),
+    bash("git commit -F <(sh -cm 'rm -rf src')"),
+    bash("git commit -m '$(rm -rf src)' $(sh -cm 'rm -rf src')"),
+  ]);
+  denies(/reads secrets or the process environment/, [
+    bash("git commit $(bash -cm 'cat .env')"),
+    bash("git tag v1 $(sh -cm 'env')"),
+  ]);
+  denies(SAFETY("hides the command it runs"), [
+    bash(`git commit -m 'rm -rf src' && bash -c "$(git log -1 --format=%s)"`),
+    bash("sh -c `git log -1 --format=%s`"),
+    bash('eval "$(git log -1 --format=%s)"'),
+  ]);
+  allows([
+    bash('git commit -m "fix: stop rm -rf in cleanup script"'),
+    bash("git commit -am 'chore: never git push --force'"),
+    bash('bash -c "pnpm test"'),
+  ]);
+});
+
+describe("re-review 2: --cached counts only as an option, before -- and outside a comment", () => {
+  denies(SAFETY("recursive delete"), [
+    bash("git rm -r src #--cached"),
+    bash("git rm -r -- src --cached"),
+    bash("git rm -r src -- --cached"),
+  ]);
+  allows([
+    bash("git rm -r --cached dist"),
+    bash("git rm -r --cached -- dist"),
+    bash("git rm -r dist --cached"),
+  ]);
+});
+
+describe("re-review 4: ~ is the home directory for every read tool", () => {
+  needsApproval([
+    ["Read", { file_path: "~/notes.txt" }],
+    ["Read", { file_path: "~" }],
+    ["Grep", { pattern: "x", path: "~/projects" }],
+    ["Glob", { pattern: "*", path: "~" }],
+  ]);
+  denies(/outside the project is not permitted/, [
+    ["Grep", { pattern: "x", path: "~/projects", output_mode: "content" }],
+  ]);
+});
+
+describe("re-review 1: single-quoted message text is literal, unless the quotes are themselves inside a string", () => {
+  allows([
+    bash("git commit -m 'docs: the `cat .env` trick is blocked'"),
+    bash("git commit -m 'docs: why $(rm -rf src) is refused'"),
+  ]);
+  denies(SAFETY("recursive delete"), [
+    bash(`bash -c "git commit -m '$(rm -rf src)'"`),
+    bash(`sh -c "git commit -m '\`rm -rf src\`'"`),
+  ]);
+});
