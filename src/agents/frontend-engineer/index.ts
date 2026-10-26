@@ -1,9 +1,10 @@
-import { advisory, IMPLEMENTER, type AgentSpec } from "../shared.js";
+import { IMPLEMENTER_MAX_TURNS, advisory, IMPLEMENTER, type AgentSpec } from "../shared.js";
 
 export const agent: AgentSpec = {
   description:
     "Implements web UI, client state, and browser-side data fetching. Use for any change to a web-facing surface.",
   model: "sonnet",
   tools: advisory(IMPLEMENTER),
+  maxTurns: IMPLEMENTER_MAX_TURNS,
   promptFile: new URL("./prompt.md", import.meta.url),
 };

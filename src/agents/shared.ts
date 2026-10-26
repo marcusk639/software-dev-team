@@ -1,8 +1,13 @@
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 
 /** An agent's definition minus its prompt text, which lives in a markdown file. */
-export interface AgentSpec extends Omit<AgentDefinition, "prompt"> {
+export interface AgentSpec
+  extends Omit<AgentDefinition, "prompt" | "model" | "maxTurns"> {
   promptFile: URL;
+  /** Required: each role's tier is deliberate, and pinned against overrides. */
+  model: NonNullable<AgentDefinition["model"]>;
+  /** Required: --max-turns bounds only the manager, not a specialist's loop. */
+  maxTurns: number;
 }
 
 /**
@@ -17,13 +22,31 @@ export const READ_ONLY = [
   "WebSearch",
   "WebFetch",
 ] as const;
-export const IMPLEMENTER = [
-  "Read",
-  "Write",
-  "Edit",
-  "Grep",
-  "Glob",
-  "Bash",
-] as const;
+
+export const IMPLEMENTER = [...READ_ONLY, "Write", "Edit", "Bash"] as const;
+
+/**
+ * A reviewer reads the change and runs checks (git diff, the type check, the
+ * tests) but cannot edit, so its findings and the engineer's fix stay separate
+ * artifacts. No web tools: the review is of the repository.
+ */
+export const REVIEWER = ["Read", "Grep", "Glob", "Bash"] as const;
+
+/**
+ * Turn caps per delegation. The manager's --max-turns does not bound a
+ * specialist's own loop, so each role gets a ceiling that leaves room for
+ * real work while stopping a specialist that is going in circles.
+ */
+export const ADVISORY_MAX_TURNS = 30;
+export const IMPLEMENTER_MAX_TURNS = 60;
 
 export const advisory = (tools: readonly string[] = READ_ONLY) => [...tools];
+
+/**
+ * The plugin shipped in this repo (plugin/), loaded into every run. Roles
+ * preload its skills by `<name>:<skill>` instead of repeating a method in
+ * their prompts. It travels with the repo, so a Docker image gets it with
+ * the rest of the source.
+ */
+export const TEAM_PLUGIN_NAME = "dev-team";
+export const TEAM_PLUGIN_DIR = new URL("../../plugin/", import.meta.url);
