@@ -134,6 +134,25 @@ const HARD_DENY: Array<{
     why: "discards uncommitted work",
   },
   {
+    // read-tree -u writes the index back over the working tree; --reset
+    // drops unmerged entries and, with -u, local changes.
+    pattern:
+      /\bgit\s+read-tree\b[^|;&\n]*\s(?:-[a-zA-Z]*u[a-zA-Z]*|--reset)(?=\s|$)/,
+    why: "discards uncommitted work",
+  },
+  {
+    // rsync --delete* removes files the source lacks; --remove-source-files
+    // deletes the source as it copies.
+    pattern:
+      /\brsync\b[^|;&\n]*\s--(?:del\b|delete(?:-[a-z]+)?\b|remove-source-files\b)/,
+    why: "recursive delete",
+  },
+  {
+    pattern:
+      /\bgh\s+(?:repo\s+delete\b|api\b[^|;&\n]*\s(?:-X\s*|--method(?:=|\s+))['"]?DELETE\b)/i,
+    why: "deletes a GitHub repository or resource",
+  },
+  {
     // Forcing git rm deletes files with uncommitted changes.
     pattern: /\bgit\s+rm\b[^|;&\n]*\s(-[a-zA-Z]*f[a-zA-Z]*|--force)(?=\s|$)/,
     why: "deletes files with uncommitted changes",

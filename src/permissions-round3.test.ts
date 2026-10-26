@@ -224,3 +224,42 @@ describe("I3: commit and PR messages are judged without their text", () => {
     bash("sh -cm 'printenv'"),
   ]);
 });
+
+describe("I4: delegations run in the checkout, never in an isolated copy", () => {
+  denies(/Delegate without isolation/, [
+    ["Agent", { subagent_type: "qa-tester", prompt: "p", isolation: "worktree" }],
+    ["Task", { subagent_type: "qa-tester", prompt: "p", isolation: "remote" }],
+    ["Agent", { subagent_type: "qa-tester", prompt: "p", isolation: "" }],
+  ]);
+  allows([["Agent", { subagent_type: "qa-tester", prompt: "p" }]]);
+});
+
+describe("I5: more commands that destroy work are hard-denied", () => {
+  denies(SAFETY("discards uncommitted work"), [
+    bash("git read-tree -u --reset HEAD"),
+    bash("git read-tree -u -m HEAD"),
+    bash("git read-tree --reset HEAD"),
+    bash("git -C . read-tree -um HEAD"),
+  ]);
+  denies(SAFETY("recursive delete"), [
+    bash("rsync -a --delete /tmp/empty/ src/"),
+    bash("rsync -a --delete-after x/ src/"),
+    bash("rsync -av --del a/ b/"),
+    bash("rsync --remove-source-files -a src/ /tmp/x/"),
+  ]);
+  denies(SAFETY("deletes a GitHub repository or resource"), [
+    bash("gh repo delete me/repo --yes"),
+    bash("gh api -X DELETE repos/me/repo"),
+    bash("gh api repos/me/repo --method DELETE"),
+    bash("gh api repos/me/repo --method=delete"),
+    bash("gh api -XDELETE repos/me/repo/git/refs/heads/main"),
+  ]);
+  allows([
+    bash("git read-tree HEAD"),
+    bash("rsync -a src/ /tmp/backup/"),
+    bash("gh api repos/me/repo"),
+    bash("gh api -X POST repos/me/repo/issues -f title=x"),
+    bash("gh repo view"),
+    bash('gh pr create --title "x" --body "gh repo delete is blocked"'),
+  ]);
+});

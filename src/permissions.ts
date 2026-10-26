@@ -170,8 +170,11 @@ export function denyReason(
     if (input.model !== undefined && policy.pinnedModels.has(type)) {
       return `${type} runs on the model its definition sets. Delegate again without a model override.`;
     }
-    if (input.isolation === "remote") {
-      return "Remote agents run outside this run's safety hooks. Delegate without isolation: remote.";
+    // A remote agent runs outside this run's safety hooks, and SDK 0.3.283
+    // creates a worktree under <repo>/.claude/worktrees/, where the agent
+    // could not write. Delegations work in the checkout itself.
+    if (input.isolation !== undefined) {
+      return `Delegations run in the project checkout: isolation ${JSON.stringify(input.isolation)} is not supported (a remote agent runs outside the safety hooks; a worktree lands under .claude/, which agents may not write). Delegate without isolation.`;
     }
     return null;
   }

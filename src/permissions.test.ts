@@ -216,6 +216,8 @@ describe("delegation", () => {
         isolation: "remote",
         prompt: "p",
       }),
+      // A worktree lands under .claude/worktrees, where agents may not write.
+      agent({ subagent_type: "qa-tester", isolation: "worktree", prompt: "p" }),
       ["Task", { subagent_type: "general-purpose", prompt: "p" }],
     ],
     "deny",
@@ -225,7 +227,6 @@ describe("delegation", () => {
       agent({ subagent_type: "qa-tester", prompt: "p" }),
       agent({ subagent_type: "target-helper", prompt: "p" }),
       agent({ subagent_type: "target-helper", model: "haiku", prompt: "p" }),
-      agent({ subagent_type: "qa-tester", isolation: "worktree", prompt: "p" }),
       ["Task", { subagent_type: "architect", prompt: "p" }],
     ],
     "allow",
