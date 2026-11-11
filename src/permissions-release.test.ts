@@ -271,3 +271,60 @@ describe("security review: git diff and git grep read only the project", () => {
     "git grep -n token src",
   ]);
 });
+
+describe("security review round 2: abbreviations and directory changes", () => {
+  for (const command of [
+    // git grep's parse-options accepts any unambiguous prefix of --no-index.
+    "git grep --no-inde -e token /run/secrets",
+    "git grep --no-in -e token /run/secrets",
+    // A directory change earlier in the command moves git out of the project.
+    "cd / && git diff etc/passwd dev/null",
+    "cd /; git grep --untracked token",
+    "(cd / && git diff etc/passwd dev/null)",
+    "pushd /etc && git diff passwd hosts",
+    "cd && git diff .bash_history .profile",
+    "cd - && git diff a b",
+    "env -C / git diff etc/passwd dev/null",
+    "env --chdir=/ git diff etc/passwd dev/null",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /outside the project/);
+    });
+  }
+  allows(["cd src && git diff a.ts", "cd src && git grep -n token", "git diff --no-indent-heuristic"]);
+});
+
+describe("security review: pre-approved npm commands keep npm's own settings", () => {
+  // `Bash(npm --prefix recovery-api test:*)` approves anything after the
+  // prefix. These would swap the shell npm runs scripts with, load another
+  // npm config, or move the run to another package directory.
+  for (const command of [
+    "npm --prefix recovery-api test --script-shell=/tmp/x.sh",
+    "npm --prefix recovery-api test --script-shell /tmp/x.sh",
+    "npm --prefix recovery-api --userconfig /tmp/rc test",
+    "npm --prefix recovery-api test --globalconfig=/tmp/rc",
+    "npm --prefix recovery-api test --prefix /tmp/x",
+    "npm --prefix recovery-api --prefix=/tmp/x test",
+    "npm_config_script_shell=/tmp/x.sh npm --prefix recovery-api test",
+    "env NPM_CONFIG_PREFIX=/tmp/x npm --prefix recovery-api test",
+    // npm takes unambiguous abbreviations, and -C for --prefix.
+    "npm --prefix recovery-api test --script-s=/tmp/x.sh",
+    "npm --prefix recovery-api test --scr /tmp/x.sh",
+    "npm --prefix recovery-api test --userc=/tmp/rc",
+    "npm --prefix recovery-api test --globalc /tmp/rc",
+    "npm --prefix recovery-api test --prefi=/tmp/x",
+    "npm --prefix recovery-api test -C /tmp/x",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /npm's shell, config or package directory/);
+    });
+  }
+  allows([
+    "npm --prefix recovery-api test",
+    "npm --prefix recovery-api test -- --testPathPattern referrals",
+    "npm --prefix=recovery-api run typecheck",
+    "npm --prefix recovery-api test --prefer-offline",
+    "npm --prefix recovery-api test -- --coverage",
+    "npm test",
+  ]);
+});

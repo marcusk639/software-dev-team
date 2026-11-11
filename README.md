@@ -23,7 +23,7 @@ Without `--profile`, the profile is detected from `--cwd`: the recovery-platform
 
 A profile is the built-in layer. A project can still customize any prompt with files in `<cwd>/.claude/dev-team/` (see `--help`); those apply on top of the profile.
 
-To run the team unattended in Docker under Hermes, see [docs/deployment.md](docs/deployment.md): the image, the credentials it must and must not get, the `--output json` result contract, and what the team can verify in a container. [docs/reviews/2026-11-10-standalone-readiness.md](docs/reviews/2026-11-10-standalone-readiness.md) is the review behind it.
+To run the team unattended in Docker under Hermes, see [docs/deployment.md](docs/deployment.md): the image, the credentials it must and must not get, the `--output json` result contract, and what the team can verify in a container. [docs/security.md](docs/security.md) lists what protects a run and every known way around it. [docs/reviews/2026-11-10-standalone-readiness.md](docs/reviews/2026-11-10-standalone-readiness.md) is the review behind it.
 
 ## Built-in profiles
 
