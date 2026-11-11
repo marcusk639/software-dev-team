@@ -9,6 +9,8 @@ export interface Cli {
   verbose: boolean;
   /** Exit non-zero when the ledger records calls to check, even if the run succeeded. */
   strict: boolean;
+  /** text: a readable trace on stdout. json: the trace on stderr and one result object on stdout. */
+  output: "text" | "json";
   allow: string[];
   resume?: string | undefined;
   maxTurns?: number | undefined;
@@ -21,6 +23,15 @@ export type ParsedArgs =
   | ({ kind: "run" } & Cli)
   | { kind: "help" }
   | { kind: "profiles" }
+  | {
+      kind: "publish";
+      resultFile: string;
+      branch: string;
+      cwd: string;
+      remote: string;
+      includePartial: boolean;
+      message?: string;
+    }
   | { kind: "roles"; cwd: string; profile?: string };
 
 export function usage(): string {
@@ -32,6 +43,9 @@ export function usage(): string {
   pnpm start --roles [--cwd <path>]    list the specialists, checking the
                                        project's prompt customizations, and exit
   pnpm start --profiles                list the built-in project profiles and exit
+  pnpm start --publish <result.json> --branch <name> [--cwd <path>]
+                                       commit a finished run's changes on a
+                                       branch and push it (see below)
 
 Options
   --cwd <path>        project the team works in (default: current directory)
@@ -59,6 +73,13 @@ Options
   --resume <id>       continue the session printed at the end of an earlier run,
                       with the same --cwd
   --verbose           show tool results, not just tool calls
+  --output <text|json>
+                      json prints the trace to stderr and, on stdout, one
+                      JSON object: the fields \`claude -p --output-format
+                      json\` reports (subtype, is_error, result, session_id,
+                      num_turns, total_cost_usd, permission_denials) plus
+                      "team": the manager's outcome and question, the
+                      profile, the ledger and the files changed in --cwd
   --strict            exit 3 when the ledger records failed, blocked, refused,
                       background or unfinished calls, when the ledger missed
                       events, or when a project agent or allow rule was
@@ -85,6 +106,17 @@ its <team> section, must keep {{roster}}. They apply on top of the profile,
 whose material is in each prompt's <project> section (and the manager's
 <project_routing>); <name>.replace.md replaces that too.
 
+--publish <result.json> takes the JSON a --output json run printed and, with
+no model involved, commits --cwd's changes on --branch with the manager's
+commit message (or --message <text>), running the repository's own hooks, and
+pushes the branch to --remote (default origin). It publishes only a run whose
+outcome is done (add --include-partial for partial), never to the remote's
+default branch, never with force, and never a file that holds secrets. An https
+remote is authenticated with GITHUB_TOKEN or GH_TOKEN; give that token to this
+step only, never to a team run. It prints one JSON object and exits 0 when
+pushed, 4 when there was nothing to publish, 1 when it failed and 2 on bad
+arguments.
+
 The team reads and writes real files in --cwd. Point it at a project directory,
 not at this one, unless you mean for it to edit itself.`;
 }
@@ -96,6 +128,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let autoApprove = false;
   let verbose = false;
   let strict = false;
+  let output: Cli["output"] = "text";
   let maxTurns: number | undefined;
   let maxBudgetUsd: number | undefined;
   let model: string | undefined;
@@ -103,6 +136,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let resume: string | undefined;
   let roles = false;
   let profiles = false;
+  let publishFile: string | undefined;
+  let branch: string | undefined;
+  let remote = "origin";
+  let includePartial = false;
+  let message: string | undefined;
   let profile: string | undefined;
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -117,6 +155,21 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case "--profiles":
         profiles = true;
         break;
+      case "--publish":
+        publishFile = expect(argv, ++i, "--publish");
+        break;
+      case "--branch":
+        branch = expect(argv, ++i, "--branch");
+        break;
+      case "--remote":
+        remote = expect(argv, ++i, "--remote");
+        break;
+      case "--include-partial":
+        includePartial = true;
+        break;
+      case "--message":
+        message = expect(argv, ++i, "--message");
+        break;
       case "--profile":
         profile = expect(argv, ++i, "--profile");
         break;
@@ -130,6 +183,14 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case "--strict":
         strict = true;
         break;
+      case "--output": {
+        const raw = expect(argv, ++i, "--output");
+        if (raw !== "text" && raw !== "json") {
+          throw new Error(`--output expects text or json, got "${raw}"`);
+        }
+        output = raw;
+        break;
+      }
       case "--cwd":
         cwd = expect(argv, ++i, "--cwd");
         break;
@@ -171,6 +232,20 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
+  if (publishFile !== undefined) {
+    if (branch === undefined) {
+      throw new Error("--publish needs --branch <name>, the branch to commit and push.");
+    }
+    return {
+      kind: "publish",
+      resultFile: publishFile,
+      branch,
+      cwd,
+      remote,
+      includePartial,
+      ...(message === undefined ? {} : { message }),
+    };
+  }
   if (profiles) return { kind: "profiles" };
   if (roles) {
     return profile === undefined
@@ -202,6 +277,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     autoApprove,
     verbose,
     strict,
+    output,
     allow,
     resume,
     maxTurns,

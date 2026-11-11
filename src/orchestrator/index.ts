@@ -9,6 +9,7 @@ import {
   createSafetyHooks,
 } from "../permissions.js";
 import { loadProjectAgents } from "../project-agents.js";
+import { createTestAuthorship } from "../test-authorship.js";
 import {
   EMPTY_SUMMARY,
   finishSummary,
@@ -140,6 +141,8 @@ export interface RunSummary extends Summary {
   warnings: readonly string[];
   /** Informational notes the run started with (also sent to onWarning); not counted by --strict. */
   notices: readonly string[];
+  /** The test files qa-tester wrote: the run's acceptance tests, which no other role could edit. */
+  acceptanceTests: readonly string[];
 }
 
 /**
@@ -150,6 +153,7 @@ export interface RunSummary extends Summary {
 export function prepareRun(options: RunOptions): {
   queryOptions: Options;
   ledger: ReturnType<typeof createLedger>;
+  authorship: ReturnType<typeof createTestAuthorship>;
   /** Configuration problems that change what the team can do; --strict counts them. */
   warnings: string[];
   /** Information only (see AllowRules.notices); --strict ignores these. */
@@ -157,11 +161,17 @@ export function prepareRun(options: RunOptions): {
 } {
   const profile = options.profile ?? genericProfile();
   const roles = Object.keys(profile.members);
-  const project = loadProjectAgents(options.cwd, roles);
+  const project = loadProjectAgents(
+    options.cwd,
+    roles,
+    profile.shadowedProjectAgents,
+  );
   // Validated once; the read roots come from the same validated list.
-  const rules = prepareAllowRules(DEFAULT_ALLOWED_TOOLS, options.allow ?? [], {
-    cwd: options.cwd,
-  });
+  const rules = prepareAllowRules(
+    [...DEFAULT_ALLOWED_TOOLS, ...profile.allow],
+    options.allow ?? [],
+    { cwd: options.cwd },
+  );
   const policy = createPolicy({
     cwd: options.cwd,
     agents: [...roles, ...project.agents.map((agent) => agent.name)],
@@ -183,6 +193,10 @@ export function prepareRun(options: RunOptions): {
     secretValues: policy.secretValues,
   });
   const safety = createSafetyHooks(policy, ledger.block);
+  const authorship = createTestAuthorship({
+    cwd: policy.cwd,
+    onDeny: ledger.block,
+  });
   const customizations = loadCustomizations(
     options.cwd,
     promptNames(profile),
@@ -203,8 +217,15 @@ export function prepareRun(options: RunOptions): {
     permissionMode: options.autoApprove ? "acceptEdits" : "default",
     hooks: {
       // Enforced in every mode, including --yes, and inside subagents.
-      PreToolUse: [...ledger.hooks.PreToolUse, ...safety.PreToolUse],
-      PostToolUse: ledger.hooks.PostToolUse,
+      PreToolUse: [
+        ...ledger.hooks.PreToolUse,
+        ...safety.PreToolUse,
+        ...authorship.hooks.PreToolUse,
+      ],
+      PostToolUse: [
+        ...ledger.hooks.PostToolUse,
+        ...authorship.hooks.PostToolUse,
+      ],
       PostToolUseFailure: ledger.hooks.PostToolUseFailure,
     },
     // Installed only for interactive runs. Under --yes, a call that acceptEdits
@@ -238,13 +259,15 @@ export function prepareRun(options: RunOptions): {
   return {
     queryOptions,
     ledger,
+    authorship,
     warnings: [...project.warnings, ...rules.warnings],
-    notices: [...rules.notices],
+    notices: [...project.notices, ...rules.notices],
   };
 }
 
 export async function runTeam(options: RunOptions): Promise<RunSummary> {
-  const { queryOptions, ledger, warnings, notices } = prepareRun(options);
+  const { queryOptions, ledger, authorship, warnings, notices } =
+    prepareRun(options);
   for (const warning of [...warnings, ...notices]) {
     (options.onWarning ?? console.warn)(warning);
   }
@@ -273,6 +296,7 @@ export async function runTeam(options: RunOptions): Promise<RunSummary> {
     ledgerFaults: ledger.faults(),
     warnings: Object.freeze([...warnings]),
     notices: Object.freeze([...notices]),
+    acceptanceTests: Object.freeze(authorship.files()),
   };
 }
 

@@ -51,9 +51,34 @@ export interface ProjectProfile {
    * is named; among matches, the one with the longest `extends` chain wins.
    */
   detect?: (cwd: string) => boolean;
+  /**
+   * The project root that contains `cwd`, or null outside the project. Set
+   * when the profile's paths, commands and the project's own .claude tree
+   * are relative to that root: the team then runs only with --cwd at it,
+   * since from a subdirectory the paths would not resolve, the root's
+   * instructions would not load, and reads above --cwd are refused. Inherited
+   * through `extends`.
+   */
+  root?: (cwd: string) => string | null;
   /** Facts every agent and the manager receive. */
   context?: string;
   /** Delegation rules for the manager, appended to its general routing. */
   routing?: readonly string[];
+  /**
+   * Permission rules (allowlist syntax, see allowlist.ts) granted to every run
+   * with this profile: the project's own test, typecheck and build commands,
+   * so qa-tester and the engineers can verify their work unattended. They
+   * accumulate parent-first and pass the same validation as --allow. Name
+   * exact commands; never a prefix rule on a program that runs any script it
+   * is given (`firebase emulators:exec:*`, `npx:*`, `node:*`).
+   */
+  allow?: readonly string[];
+  /**
+   * Project agents (in the target's .claude/agents) known to share a team
+   * role's name. The team's role is used either way; naming them here makes
+   * their rejection a notice instead of a configuration warning, so a
+   * --strict run is not flagged on every job for a known, harmless clash.
+   */
+  shadowedProjectAgents?: readonly string[];
   roles?: Readonly<Record<string, RoleOverlay>>;
 }

@@ -50,9 +50,17 @@ export function loadProjectAgents(
   cwd: string,
   /** The team the run uses, whose role names project agents may not take. */
   teamRoles: readonly string[] = ROLES,
+  /**
+   * Names the project is known to use for its own agent and the team for a
+   * role (ProjectProfile.shadowedProjectAgents). Still rejected, but expected,
+   * so reported as a notice that --strict does not count.
+   */
+  knownShadows: readonly string[] = [],
 ): {
   agents: ProjectAgent[];
   warnings: string[];
+  /** Expected rejections, for information only. */
+  notices: string[];
 } {
   const dir = join(cwd, ".claude", "agents");
   let entries;
@@ -60,7 +68,7 @@ export function loadProjectAgents(
     entries = readdirSync(dir, { recursive: true, withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { agents: [], warnings: [] };
+      return { agents: [], warnings: [], notices: [] };
     }
     throw error;
   }
@@ -69,6 +77,8 @@ export function loadProjectAgents(
   const roles = new Set<string>(teamRoles.map((n) => n.toLowerCase()));
   const agents: ProjectAgent[] = [];
   const warnings: string[] = [];
+  const notices: string[] = [];
+  const expected = new Set(knownShadows.map((n) => n.toLowerCase()));
   const seen = new Set<string>();
 
   const paths = entries
@@ -126,7 +136,12 @@ export function loadProjectAgents(
       continue;
     }
     if (roles.has(key)) {
-      skip(`"${name}" is a team role; the team's own definition is used.`);
+      const why = `"${name}" is a team role; the team's own definition is used.`;
+      if (expected.has(key)) {
+        notices.push(`Project agent ${relative(cwd, path)} is ignored: ${why}`);
+      } else {
+        skip(why);
+      }
       continue;
     }
     if (seen.has(key)) {
@@ -137,5 +152,5 @@ export function loadProjectAgents(
     const model = MODEL.exec(frontmatter)?.[1]?.trim();
     agents.push(model ? { name, model } : { name });
   }
-  return { agents, warnings };
+  return { agents, warnings, notices };
 }

@@ -170,3 +170,47 @@ describe("usage: --yes names what acceptEdits approves", () => {
     assert.match(text, /rm, rmdir and sed included/);
   });
 });
+
+describe("--output", () => {
+  it("defaults to text", () => {
+    const cli = parseArgs(["do it"]);
+    assert.ok(cli.kind === "run");
+    assert.equal(cli.output, "text");
+  });
+
+  it("takes json for an outer orchestrator", () => {
+    const cli = parseArgs(["--output", "json", "--yes", "do it"]);
+    assert.ok(cli.kind === "run");
+    assert.equal(cli.output, "json");
+  });
+
+  it("rejects any other format", () => {
+    assert.throws(() => parseArgs(["--output", "yaml", "x"]), /--output expects text or json/);
+  });
+
+  it("is documented in the help", () => {
+    assert.match(usage(), /--output <text\|json>/);
+  });
+});
+
+describe("--publish", () => {
+  it("takes the result file, the branch and its options", () => {
+    assert.deepEqual(
+      parseArgs(["--publish", "result.json", "--branch", "hco/42-x", "--cwd", "/p", "--remote", "fork", "--include-partial", "--message", "fix: x"]),
+      { kind: "publish", resultFile: "result.json", branch: "hco/42-x", cwd: "/p", remote: "fork", includePartial: true, message: "fix: x" },
+    );
+  });
+
+  it("defaults the remote to origin and needs a branch", () => {
+    const cli = parseArgs(["--publish", "r.json", "--branch", "b"]);
+    assert.ok(cli.kind === "publish");
+    assert.equal(cli.remote, "origin");
+    assert.equal(cli.includePartial, false);
+    assert.throws(() => parseArgs(["--publish", "r.json"]), /--publish needs --branch/);
+  });
+
+  it("is documented in the help", () => {
+    assert.match(usage(), /--publish <result\.json>/);
+  });
+});
+

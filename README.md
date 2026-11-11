@@ -1,6 +1,6 @@
 # software-dev-team
 
-An autonomous software development team built on the Claude Agent SDK. An Engineering Manager agent decomposes a task and delegates it to specialists (product manager, architect, UX designer, backend, frontend and mobile engineers, database specialist, QA, code reviewer, monetization, strategy). It holds each result to an evidence bar before reporting it done.
+An autonomous software development team built on the Claude Agent SDK. An Engineering Manager agent decomposes a task and delegates it to specialists (product manager, architect, UX designer, backend, frontend and mobile engineers, database specialist, QA, code reviewer, monetization, strategy). It works test-first: qa-tester turns the acceptance criteria into failing tests before an engineer starts, and only qa-tester can edit those tests. The manager holds each result to an evidence bar (a test seen failing, then passing) before reporting it done.
 
 The specialists are **configured per project**. A project profile turns the stack-neutral team into specialists who know the project's technologies, conventions, commands and invariants. For example, under the `regroup` profile the frontend engineer is a React Native / Redux Toolkit / React Query / Stripe specialist. The backend engineer becomes a GCP, Cloud Functions v2, Firestore and Stripe Connect specialist.
 
@@ -8,19 +8,22 @@ The specialists are **configured per project**. A project profile turns the stac
 
 ```bash
 pnpm install
-pnpm start --cwd ../recovery-platform/regroup "Add a CSV export of payment history for operators"
+pnpm start --cwd ../recovery-platform --profile regroup "Add a CSV export of payment history for operators"
 
-pnpm start --profiles                                   # list built-in profiles
-pnpm start --roles --cwd ../recovery-platform/regroup   # show the team that would run there
-pnpm start --profile regroup --cwd ../recovery-platform "…"   # pick a profile explicitly
-pnpm start --profile ./profiles/acme.ts --cwd ../acme "…"     # use a profile module from disk
+pnpm start --profiles                                          # list built-in profiles
+pnpm start --roles --cwd ../recovery-platform --profile regroup  # show the team that would run there
+pnpm start --profile ./profiles/acme.ts --cwd ../acme "…"      # use a profile module from disk
+pnpm start --output json --yes --cwd ../recovery-platform --profile regroup --file task.md  # for an orchestrator
+pnpm start --publish result.json --branch hco/42-export --cwd ../recovery-platform     # then commit + push that run (GITHUB_TOKEN)
 ```
 
-Without `--profile`, the profile is detected from `--cwd`, and the most specific match wins. Anything under `recovery-platform/regroup/` gets `regroup`. The rest of the monorepo gets `recovery-platform`, and everything else gets `generic` (the original stack-neutral team). The active profile is printed at startup.
+Without `--profile`, the profile is detected from `--cwd`: the recovery-platform monorepo gets `recovery-platform`, and everything else gets `generic` (the stack-neutral team). The recovery-platform profiles give paths and commands relative to the monorepo root, so they run only with `--cwd` at the root. Name the product with `--profile regroup`. A `--cwd` inside a product directory is refused with the flags to use instead. The active profile is printed at startup.
 
 `pnpm start --help` lists the other options (`--yes`, `--allow`, `--resume`, `--strict`, `--max-turns`, `--max-budget`, …). The team edits real files in `--cwd`, and loads that repository's `.claude` settings and hooks, so point it only at repositories you trust.
 
 A profile is the built-in layer. A project can still customize any prompt with files in `<cwd>/.claude/dev-team/` (see `--help`); those apply on top of the profile.
+
+To run the team unattended in Docker under Hermes, see [docs/deployment.md](docs/deployment.md): the image, the credentials it must and must not get, the `--output json` result contract, and what the team can verify in a container. [docs/reviews/2026-11-10-standalone-readiness.md](docs/reviews/2026-11-10-standalone-readiness.md) is the review behind it.
 
 ## Built-in profiles
 
@@ -62,7 +65,13 @@ interface RoleOverlay {
 }
 ```
 
-A profile also carries shared `context`, which every agent and the manager receive. It can carry `routing` rules that the manager applies over its general routing, and an optional `detect(cwd)`.
+A profile also carries shared `context`, which every agent and the manager receive. It can also carry:
+
+- `routing` rules, which the manager applies over its general routing;
+- `allow` rules, which pre-approve the project's own test, typecheck and build commands for unattended runs. They are exact commands, never a wrapper that runs any script;
+- `root(cwd)`, which makes the run require `--cwd` at the project root;
+- `shadowedProjectAgents`: project agents known to share a team role's name, whose rejection is then a notice rather than a `--strict` warning;
+- an optional `detect(cwd)`.
 
 Profiles chain with `extends`. Down the chain, scalar fields are overridden by the child. `expertise`, `standards`, `context` and `routing` accumulate parent-first, so a product profile adds to its platform profile rather than repeating it. A role name that is not a team role defines a new role, which must supply `description`, `model`, `tools`, `identity` and `core`, and should supply an `outputFormat` so its report has the shape the manager expects. A new role is on the manager's roster, can be delegated to and has its model pinned by the safety policy, like any team role.
 

@@ -21,7 +21,7 @@ describe("loadProjectAgents", () => {
   it("returns nothing when the project has no agents directory", () => {
     assert.deepEqual(
       loadProjectAgents(mkdtempSync(join(tmpdir(), "sdt-agents-"))),
-      { agents: [], warnings: [] },
+      { agents: [], warnings: [], notices: [] },
     );
   });
 
@@ -55,6 +55,7 @@ describe("loadProjectAgents", () => {
     assert.deepEqual(loadProjectAgents(cwd), {
       agents: [{ name: "target-helper" }],
       warnings: [],
+      notices: [],
     });
   });
 });
@@ -171,3 +172,18 @@ describe("loadProjectAgents: names and files it must not trust", () => {
     ]);
   });
 });
+
+describe("project agents the profile knows share a team role's name", () => {
+  it("are still rejected, but reported as a notice rather than a warning", () => {
+    const { cwd, dir } = project();
+    writeFileSync(join(dir, "pm.md"), "---\nname: product-manager\n---\n");
+    writeFileSync(join(dir, "qa.md"), "---\nname: qa-tester\n---\n");
+    const result = loadProjectAgents(cwd, undefined, ["product-manager"]);
+    assert.deepEqual(result.agents, []);
+    assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0]!, /"qa-tester" is a team role/);
+    assert.equal(result.notices.length, 1);
+    assert.match(result.notices[0]!, /"product-manager" is a team role/);
+  });
+});
+

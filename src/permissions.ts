@@ -478,7 +478,9 @@ function askOnStdin(): Ask {
   let closed = false;
   const open = () => {
     if (rl) return rl;
-    rl = createInterface({ input: process.stdin, output: process.stdout });
+    // Prompts are interface text: on stderr, stdout stays the run's output
+    // (one JSON object under --output json).
+    rl = createInterface({ input: process.stdin, output: process.stderr });
     // Ctrl-C at the prompt stops the run instead of leaving it waiting.
     rl.on("SIGINT", () => process.kill(process.pid, "SIGINT"));
     rl.once("close", () => {

@@ -1,4 +1,7 @@
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  SDKMessage,
+  SDKPermissionDenial,
+} from "@anthropic-ai/claude-agent-sdk";
 
 export interface Summary {
   result: string;
@@ -9,6 +12,10 @@ export interface Summary {
   sessionId?: string;
   /** Whether any result message arrived; a run without one did not finish. */
   received: boolean;
+  /** The latest result's subtype (success, error_max_turns, …), as `claude -p` reports it. */
+  subtype?: string | undefined;
+  /** Tool calls the SDK refused across the run (its authoritative record). */
+  permissionDenials: readonly SDKPermissionDenial[];
 }
 
 export const EMPTY_SUMMARY: Readonly<Summary> = Object.freeze({
@@ -17,6 +24,7 @@ export const EMPTY_SUMMARY: Readonly<Summary> = Object.freeze({
   turns: 0,
   durationMs: 0,
   received: false,
+  permissionDenials: Object.freeze([]),
 });
 
 /**
@@ -49,6 +57,16 @@ export function foldMessage(summary: Summary, message: SDKMessage): Summary {
     ...(costUsd === undefined ? {} : { costUsd }),
     sessionId: message.session_id,
     received: true,
+    subtype: message.subtype,
+    permissionDenials: [
+      ...summary.permissionDenials,
+      ...(message.permission_denials ?? []).filter(
+        (denial) =>
+          !summary.permissionDenials.some(
+            (seen) => seen.tool_use_id === denial.tool_use_id,
+          ),
+      ),
+    ],
   };
 }
 

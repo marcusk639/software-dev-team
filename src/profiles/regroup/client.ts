@@ -25,7 +25,7 @@ Rules:
       "TypeScript: discriminated unions for async and UI state, typed navigation params, typed Redux hooks, `unknown` plus narrowing at untrusted boundaries (callable responses, Firestore documents), no `any` leaking through public interfaces.",
       "Redux Toolkit 2 with react-redux 8: `createSlice`, `createAsyncThunk` with typed `rejectWithValue`, `createEntityAdapter` for normalized collections, memoized selectors with `createSelector`, Immer-based updates, and keeping the store serializable (no Firestore `Timestamp`s or class instances).",
       "TanStack React Query 5 for server state: query-key factories, `staleTime`, `enabled` guards, `useInfiniteQuery` with cursor pagination, mutations with snapshot / rollback / invalidate optimistic updates, and invalidating the right keys after a callable changes server state.",
-      "State placement: server data in React Query; cross-screen client and UI state in Redux; screen-local state in `useState` / `useReducer`; form state in Formik. Never mirror the same server data in both Redux and React Query.",
+      "State placement: server data in React Query; cross-screen client and UI state in Redux; screen-local state in `useState` / `useReducer`; form state in Formik. Don't add new mirroring of server data in Redux: a Redux-to-React-Query migration is in progress, and `guestsSlice` / `housesSlice` still coexist with their queries (`regroup/mobile/.claude/rules/architecture.md`).",
       "UI component technical design: presentational versus container components, composition over configuration props, explicit typed prop interfaces, controlled versus uncontrolled inputs, theming through the existing theme provider, and no side effects during render.",
       "React Navigation 7 native stack: typed route param lists, passing ids rather than objects as params, `useFocusEffect` for refresh-on-focus, Android back behavior.",
       "Firebase from the client with @react-native-firebase 17: Auth state and custom claims from the ID token; Firestore listeners with `onSnapshot` and unsubscribe on unmount; Cloud Functions callables, mapping `HttpsError` codes (`unauthenticated`, `permission-denied`, `failed-precondition`, `invalid-argument`, `not-found`, `resource-exhausted`) to distinct user-facing states.",
@@ -42,9 +42,13 @@ Rules:
       "`auth` is a pre-initialized singleton from `firebase-setup.ts`: use `auth.currentUser`, not `auth().currentUser`.",
       "Imports are relative; the `@/` alias works only in Jest. Lodash imports are named (`import { isEmpty } from 'lodash'`).",
       "Reusable cross-screen components use the `rats-` prefix under `src/components/`; screen-specific sub-components stay in the screen's directory. New entities and services are `.ts`; use `.tsx` only for files that export JSX.",
-      "Display money by converting integer cents to dollars at render time only; never send a client-computed amount to a callable as the source of truth.",
+      "Money has two units: `guest.rentOwed` and `guest.choreFees` are integer cents, while `house.monthlyRent` and `house.weeklyRent` are dollars; new `payments.amount` writes are cents, but older payment documents may hold dollars. Use the branded `Cents` / `Dollars` types and conversions in `regroup/mobile/src/util/money.ts`, since mixing them charges residents 100x. Never send a client-computed amount to a callable as the source of truth.",
       "`src/services/paywall.ts` is UX. Never add a client-only gate and describe it as enforcement; the server gate is `regroup/functions/src/util/entitlement.ts`.",
-      "Verify with `npm test` and `npm run typecheck` in `regroup/mobile` (plus `npm run typecheck:ratchet`). For JS-only work install with `npm ci --ignore-scripts`, because postinstall runs CocoaPods.",
+      "Verify with `npm --prefix regroup/mobile test`, `npm --prefix regroup/mobile run typecheck` and `npm --prefix regroup/mobile run typecheck:ratchet`, from the monorepo root. Dependencies are installed before the run (`npm ci --ignore-scripts` then `npx patch-package`, because postinstall runs CocoaPods); don't reinstall them.",
+      "Give every element a test interacts with a kebab-case `testID` of the form `screen-element-role` (`signup-email-input`, `dashboard-screen`), as the Maestro flows select on them (`regroup/mobile/docs/e2e/MAESTRO_GUIDE.md`).",
+      "Test files follow the Jest configs: unit tests next to the code, with `firebase-setup` mocked by `__mocks__/firebase-setup.ts`; emulator-backed tests named `*.integration.test.ts` or `*.emulator.test.ts`, with the emulator host `127.0.0.1`.",
+      "Log errors with `logException` from the logging module and rethrow a user-facing `Error`; never swallow one. Never import `debug-logger.ts`: it exports the same names and persists whole user objects (`regroup/mobile/CLAUDE.md`).",
+      "The app's zod is v3 while Cloud Functions use v4: don't copy schemas across unchanged.",
     ],
   },
 
@@ -75,10 +79,10 @@ Rules:
       "Sentry React Native native crash reporting and release configuration.",
     ],
     standards: [
-      "Read `regroup/mobile/CLAUDE.md` for the iOS and Android build details and patch-package notes before changing native configuration.",
+      "Read `regroup/mobile/CLAUDE.md` for the iOS and Android build details (build variants, `E2E_VARIANT`, the release guard) before changing native configuration. The postinstall runs `patch-package`, the iOS permissions setup and `pod-install`; the patches are load-bearing.",
       "The `rats` codename and the bundle and application ids are bound to App Store, Play Store and Firebase configuration; never change them without a coordinated native, store and Firebase change.",
       "Patches live in `regroup/mobile/patches/` and are applied by postinstall; a dependency upgrade must re-check each patch it touches.",
-      "Run `npm run check:env` (or `check:env:release` for release work) when touching release configuration.",
+      "Run `npm --prefix regroup/mobile run check:env` (or `check:env:release` for release work) when touching release configuration; an unattended run needs it approved, so report it as not run if it is refused.",
       "Maestro flows (`regroup/mobile/maestro/flows/`) and Detox suites (`regroup/mobile/e2e/`) need a simulator or emulator. You cannot run them here; list exactly which ones must be run on a device.",
     ],
   },
@@ -104,7 +108,7 @@ Rules:
     outputFormat: `After the status line, in this order:
 1. **Changes**: each file you changed and what changed, briefly.
 2. **States implemented**: each state the change introduces and where it is handled.
-3. **Tests**: the commands you ran and their results, quoting the summary lines. If a command was refused or you couldn't run it, say so plainly.
+3. **Tests**: the failing run you saw before your change and the commands you ran after it, with their results, quoting the summary lines. If a command was refused or you couldn't run it, say so plainly.
 4. **Needs visual check**: what someone should look at in a browser, or "none".
 5. **Spec gaps**: behavior you had to decide, or couldn't, or "none".`,
     expertise: [
@@ -117,6 +121,8 @@ Rules:
     ],
     standards: [
       "Read `regroup/web/CLAUDE.md` before any change.",
+      "The portal uses the Firebase JS SDK v8 with its namespaced API (through @angular/fire 6), not the modular v9+ API.",
+      "Verify with `regroup/web/node_modules/.bin/tsc --noEmit -p regroup/web/tsconfig.spec.json` from the monorepo root, the check CI runs. The Karma suite is not green; run only the specs `regroup/web/CLAUDE.md` names, and say the rest is untested.",
       "Run build and serve through the npm scripts; they set `NODE_OPTIONS=--openssl-legacy-provider`, without which the toolchain fails.",
       "Guard every code path touching `window`, `document`, jQuery or `Stripe` with `isPlatformBrowser(this.platformId)`; the `ssr` Cloud Function executes components in Node.",
       "Firestore services extend `BaseFirestoreService<T>` (`src/app/services/base-service.ts`); for a new one follow `.claude/skills/regroup-web-new-firestore-service/SKILL.md`.",

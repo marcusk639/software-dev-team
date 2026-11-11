@@ -193,7 +193,7 @@ describe("approval: only this session's own directory is exempt, and symlinks ar
 describe("I3 (withdrawn in round 4): messages are screened like any other text", () => {
   // The allow cases that named a blocked command moved to
   // permissions-message-false-positives.test.ts as pinned denies.
-  allows([bash('gh pr edit 4 --body "explains git config alias.x"')]);
+  allows([bash('gh issue comment 4 --body "explains git config alias.x"')]);
   denies(SAFETY("recursive delete"), [
     bash('git commit -m "$(rm -rf src)"'),
     bash("git commit -m 'x' && rm -rf src"),

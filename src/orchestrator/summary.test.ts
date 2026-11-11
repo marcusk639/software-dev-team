@@ -83,3 +83,22 @@ describe("run summary: what the operator must see", () => {
     assert.deepEqual(finishSummary(done), done);
   });
 });
+
+describe("run summary: fields an outer orchestrator reads", () => {
+  it("keeps the latest result's subtype and its permission denials", () => {
+    const denial = { tool_name: "Bash", tool_use_id: "t1", tool_input: { command: "npm test" } };
+    let summary = foldMessage(EMPTY_SUMMARY, result({ subtype: "success", permission_denials: [denial] }));
+    assert.equal(summary.subtype, "success");
+    assert.deepEqual(summary.permissionDenials, [denial]);
+    summary = foldMessage(summary, result({ subtype: "error_max_turns", is_error: true, permission_denials: [] }));
+    assert.equal(summary.subtype, "error_max_turns");
+    // Denials accumulate across results: a later one does not erase an earlier refusal.
+    assert.deepEqual(summary.permissionDenials, [denial]);
+  });
+
+  it("starts with no subtype and no denials", () => {
+    assert.equal(EMPTY_SUMMARY.subtype, undefined);
+    assert.deepEqual(EMPTY_SUMMARY.permissionDenials, []);
+  });
+});
+

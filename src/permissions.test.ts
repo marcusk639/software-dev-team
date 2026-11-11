@@ -89,7 +89,7 @@ describe("destructive commands", () => {
       bash("git checkout -b feature"),
       bash("git checkout main"),
       bash("git restore --staged src/a.ts"),
-      bash("git push origin main"),
+      bash("git fetch origin main"),
       bash("git branch -d merged"),
       bash("git stash pop"),
       bash("find . -name '*.ts'"),
@@ -330,7 +330,7 @@ describe("review fixes", () => {
       bash("env FOO=1 pnpm test"),
       bash("git clean -n"),
       bash("git switch main"),
-      bash("git push origin feature"),
+      bash("git fetch origin feature"),
     ],
     "allow",
   );
@@ -442,7 +442,7 @@ describe("iterative review cycle 1", () => {
   );
   check(
     [
-      bash("git push -u origin feature"),
+      bash("git fetch --prune origin"),
       bash("git checkout -b feature"),
       bash("git branch -d merged"),
       bash("git rm -r --cached node_modules"),

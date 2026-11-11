@@ -109,7 +109,7 @@ describe("resolveAllowedTools", () => {
     "Edit(docs/*.md)",
     "MultiEdit(src/**)",
     "Bash(rm:*)",
-    "Bash(git push:*)",
+    "Bash(git branch:*)",
   ]) {
     it(`accepts scoped rule ${rule}`, () => {
       assert.doesNotThrow(() => resolveAllowedTools([], [rule]));
@@ -127,7 +127,7 @@ describe("allow rules that reach hard-denied commands", () => {
   for (const [rule, command] of [
     ["Bash(rm:*)", "rm"],
     ["Bash(rm -f:*)", "rm -f"],
-    ["Bash(git push:*)", "git push"],
+    ["Bash(git branch:*)", "git branch"],
     ["Bash(git reset:*)", "git reset"],
   ] as const) {
     it(`accepts ${rule} but warns that its blocked forms stay blocked`, () => {
@@ -238,8 +238,8 @@ describe("prepareAllowRules: read roots use Claude Code's rule-path syntax", () 
   });
 
   it("reports Bash prefix-rule warnings as notices, not as warnings that change the run", () => {
-    const { warnings, notices, allowedTools } = prepare("Bash(git push:*)");
-    assert.ok(allowedTools.includes("Bash(git push:*)"));
+    const { warnings, notices, allowedTools } = prepare("Bash(git branch:*)");
+    assert.ok(allowedTools.includes("Bash(git branch:*)"));
     assert.match(notices.join("\n"), /stay blocked/);
     assert.deepEqual(warnings, []);
   });

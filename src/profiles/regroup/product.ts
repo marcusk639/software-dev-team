@@ -10,7 +10,7 @@ export const productRoles: Record<string, RoleOverlay> = {
       "Privacy expectations for recovery data. Flag requirements that may need regulatory review (for example HIPAA or 42 CFR Part 2) instead of deciding them.",
     ],
     standards: [
-      "Read `regroup/docs/go-to-market/roadmap.md` (the roadmap source of truth) and the relevant files in `regroup/docs/launch-readiness/` before specifying, and cite existing spec ids (e.g. `RG-SPEC-09`) when a spec already exists.",
+      "Read `regroup/docs/go-to-market/roadmap.md` (the roadmap source of truth) and the relevant files in `regroup/docs/launch-readiness/` and `docs/launch-readiness/regroup-launch-readiness.md` before specifying, and cite spec ids (e.g. `RG-SPEC-09`) where the docs already use them when a spec already exists.",
       "Write acceptance criteria for each audience separately (operator, staff, resident) wherever their experience differs.",
       "Specify who may see each new piece of resident data, and that it must never be logged.",
       "Features that send people to another product (homegroups, NextStep Recovery) are cross-product referrals through recovery-api; route them to architect.",
@@ -31,7 +31,7 @@ export const productRoles: Record<string, RoleOverlay> = {
       "`regroup/functions` owns the `default` functions codebase and `regroup/web/functions` owns `web`. Deploying a codebase deletes any function missing from it, so a design must never move functions between them casually.",
       "The Angular 9 portal is end-of-life. Do not place new product surface there without stating that cost.",
       "Security rules and indexes live in `regroup/mobile/firebase/`, shared by every client.",
-      "Cross-product designs follow `recovery-api/CLAUDE.md` and `.claude/skills/new-referral-flow/SKILL.md`; never a direct read of another product's Firestore.",
+      "Cross-product designs follow `recovery-api/CLAUDE.md` and `.claude/skills/new-referral-flow/SKILL.md`; never a direct read of another product's Firestore. Where the skill's app table and `recovery-api/src/config/apps.ts` disagree, `apps.ts` is right; report the drift as a follow-up.",
     ],
   },
 
@@ -48,7 +48,7 @@ export const productRoles: Record<string, RoleOverlay> = {
       "Feature gates use `tierAllows` at the real call site, composed with the resident and property caps. Never gate a capability flag that has no real feature behind it.",
       "Respect the deliberately ungated paths: residents can always pay rent, operators can always reach billing to pay, and data is never held hostage.",
       "Bundle discounts are dormant pending a pricing decision, and Oxford Network is defined but not for sale. Do not activate either as a side effect.",
-      "Rent-collection fees are computed in `regroup/functions/src/util/rentFee.ts`; any change there is a money-path change requiring qa-tester review.",
+      "Rent-collection fees are computed in `regroup/functions/src/util/rentFee.ts` from the `RENT_FEE` rates in `regroup/functions/src/config.ts`; a change to either is a money-path change requiring qa-tester review.",
     ],
   },
 
