@@ -8,14 +8,24 @@ import { isOneOf, isRecord, WRITE_TOOLS } from "./tools.js";
 export const TEST_AUTHOR = "qa-tester";
 
 /**
- * A test file, by the layouts test runners use: `*.test.*`, `*.spec.*` and
- * `*.e2e.*` files, and anything under `__tests__/`, `test/`, `tests/`,
- * `e2e/` or `maestro/`. This matches the test paths recovery-platform's own
- * implementer gate protects. Only these are locked: a source stub qa-tester
- * adds so a test can load is the engineer's to implement.
+ * A test file, by the layouts test runners use: anything under `__tests__/`,
+ * `test/`, `tests/`, `e2e/` or `maestro/`; `*.test.*`, `*.spec.*`, `*.e2e.*`
+ * and Cypress's `*.cy.*` source files; and Python's `test_*.py`, and the
+ * `*_test.*` / `*_spec.*` names Go, Python and RSpec use. This covers the
+ * test paths recovery-platform's own implementer gate protects. Only these
+ * are locked: a source stub qa-tester adds so a test can load is the
+ * engineer's to implement, and a snapshot or a document is not a test.
  */
-export const TEST_PATH =
-  /(^|\/)(__tests__|e2e|\.?maestro|tests?)\/|\.(test|spec|e2e)\.[cm]?[jt]sx?$/i;
+const CODE = "(?:[cm]?[jt]sx?|py|rb|go|java|kts?|swift|dart|php|cs|rs|exs?)";
+export const TEST_PATH = new RegExp(
+  [
+    String.raw`(^|/)(__tests__|e2e|\.?maestro|tests?)/`,
+    String.raw`\.(test|spec|e2e|cy)\.${CODE}$`,
+    String.raw`(^|/)test_[^/]*\.py$`,
+    String.raw`_(test|spec)\.${CODE}$`,
+  ].join("|"),
+  "i",
+);
 
 /**
  * The path a file would have once every symlink is resolved, so `a/../x`,
