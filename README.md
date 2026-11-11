@@ -14,6 +14,7 @@ pnpm start --profiles                                          # list built-in p
 pnpm start --roles --cwd ../recovery-platform --profile regroup  # show the team that would run there
 pnpm start --profile ./profiles/acme.ts --cwd ../acme "…"      # use a profile module from disk
 pnpm start --output json --yes --cwd ../recovery-platform --profile regroup --file task.md  # for an orchestrator
+pnpm start --publish result.json --branch hco/42-export --cwd ../recovery-platform     # then commit + push that run (GITHUB_TOKEN)
 ```
 
 Without `--profile`, the profile is detected from `--cwd`: the recovery-platform monorepo gets `recovery-platform`, and everything else gets `generic` (the stack-neutral team). The recovery-platform profiles give paths and commands relative to the monorepo root, so they run only with `--cwd` at the root. Name the product with `--profile regroup`. A `--cwd` inside a product directory is refused with the flags to use instead. The active profile is printed at startup.

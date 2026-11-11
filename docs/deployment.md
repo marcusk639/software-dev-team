@@ -24,13 +24,14 @@ Hermes (plans, queues, talks to you on Telegram)
        ├─ 3. docker run software-dev-team --output json …  (network: API only)   §5
        │      └─ manager → specialists → tests → review; nothing committed
        ├─ 4. read the JSON result from stdout                        §6
-       └─ 5. commit (inside a container) with team.commit_message,
-             or resume, or escalate                                  §6, §7
+       └─ 5. on done: docker run software-dev-team --publish result.json
+             --branch hco/<id> (GitHub token, no API key): commit + push   §6
+             otherwise: resume with an answer, or escalate                 §6, §7
 ```
 
 The split is deliberate:
 
-- **The team builds and verifies; it never ships.** The safety layer hard-denies pushing, opening, editing or merging pull requests, deploying, releasing and dispatching CI (`RELEASE_COMMANDS` in `src/permissions/shell.ts`). The team also leaves its changes uncommitted. It can't write CI workflows (`.github/workflows`) or git hooks (`.husky`, `.githooks`, `scripts/git-hooks`), because that code runs outside the run with more access than the team has. The dispatcher commits the working tree after reading the result, which runs the repo's own commit gates (`.claude/agent-gates/verify-diff.sh`, the secret scan).
+- **The team builds and verifies; it never ships.** The safety layer hard-denies pushing, opening, editing or merging pull requests, deploying, releasing and dispatching CI (`RELEASE_COMMANDS` in `src/permissions/shell.ts`). The team also leaves its changes uncommitted. It can't write CI workflows (`.github/workflows`) or git hooks (`.husky`, `.githooks`, `scripts/git-hooks`), because that code runs outside the run with more access than the team has. Committing and pushing is a separate, model-free step, `--publish` (§6), which takes the run's result and runs the repo's own commit gates (`.claude/agent-gates/verify-diff.sh`, the secret scan) as it commits.
 - **The container is the security boundary.** The harness's command rules are pattern-based and best-effort: they stop accidents and obvious misuse, not a determined adversary. What makes an unattended run safe is what the container doesn't have: production credentials, write access to GitHub, and a network beyond the Anthropic API.
 
 ## 2. Build the image
@@ -56,7 +57,7 @@ Give the run container **exactly one secret**: `ANTHROPIC_API_KEY`.
 
 - **Use an API key, not your Max subscription token.** Anthropic's terms ask products built on the Agent SDK to authenticate with API keys. They say Pro/Max limits "assume ordinary, individual usage of Claude Code and the Agent SDK", and Anthropic may enforce this without notice ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance), [authentication](https://code.claude.com/docs/en/authentication)). A 24/7 server running parallel multi-agent jobs is not individual usage, so don't put `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` on it. If both are set, `ANTHROPIC_API_KEY` wins.
 - **Never production credentials:** no Firebase deploy token or service-account JSON, no Stripe live keys, no Neon, Railway or Sentry tokens. The deny rules make deploying hard; absent credentials make it impossible. The regroup functions build copies `src/scripts/service-key.json` only if it exists. Keep it out of the job's checkout.
-- **GitHub:** the run container needs no GitHub access. The dispatcher clones with a read-only deploy key or a fine-grained PAT, outside the run container.
+- **GitHub:** the run container needs no GitHub access. The dispatcher clones with a read-only deploy key or a fine-grained PAT, outside the run container. Only the publish step (§6) gets a write token: a fine-grained PAT with Contents read and write on this one repository, as `GITHUB_TOKEN`. Protect `main` with a branch protection rule, so even that token can't push to it: publish also refuses the default branch itself.
 - **Stripe test mode:** the Jest suites mock Stripe. The `stripe:scenario:*` scripts need the Stripe CLI and test keys, so leave them out and the team will report them as not run.
 
 Set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, so the only egress the run needs is `api.anthropic.com` (not verified here: confirm with your egress proxy's logs).
@@ -152,7 +153,7 @@ What the dispatcher should do:
 
 | Exit, outcome                                      | Action                                                                                                                                                       |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 0, `done` | Review `changed_files` and `acceptance_tests`, then commit on the job branch with `commit_message`, inside a job container (below), and fetch the branch for your review. |
+| 0, `done` | Review `changed_files` and `acceptance_tests` if you want to, then run the publish step below to commit and push the job branch. |
 | 0 or 3, `partial`                                  | Commit to the job branch marked WIP or leave it uncommitted, and send yourself the report. `ledger` says what failed.                                        |
 | 0, `needs-decision`                                | Send `team.question` to yourself (Telegram). Resume with the answer: `--resume <session_id> --file answer.md`, same `--cwd`, same volume.                    |
 | any, `blocked`                                     | Usually a refused command (`permission_denials`) or a missing dependency. Fix the environment or the allow rules; don't loosen the safety layer.             |
@@ -160,16 +161,30 @@ What the dispatcher should do:
 | 2                                                  | A configuration bug in the job (flags, profile, `--cwd`). Fix it before retrying.                                                                            |
 | 3                                                  | Treat like `partial` until someone has looked at `team.warning`.                                                                                             |
 
-**Commit inside a container, never on the host.** The repo's git hooks call scripts from the working tree. recovery-platform's `pre-commit` runs `.claude/agent-gates/verify-diff.sh`, which the team could have edited, so a commit on the host would run the team's code with the host's access. The team can't write the hook directories, but it can write other scripts those hooks call. Commit with the same image and flags as the run, minus the API key:
+**Commit and push with `--publish`.** A model-free step in the same image commits the run's changes on the job branch and pushes the branch to GitHub:
 
 ```bash
-docker run --rm --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --network none \
-  -v /srv/jobs/$ID/repo:/workspace --entrypoint git software-dev-team:<tag> \
-  -c user.name="dev-team" -c user.email="dev-team@localhost" \
-  -C /workspace commit -am "$COMMIT_MESSAGE"
+docker run --rm --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges \
+  -e GITHUB_TOKEN \
+  -v /srv/jobs/$ID/repo:/workspace -v /srv/jobs/$ID/result.json:/result.json:ro \
+  software-dev-team:<tag> --publish /result.json --branch hco/$ID --cwd /workspace
 ```
 
-Add new files with `git add` from `changed_files` first. `-a` stages only tracked files. Then `git fetch` the branch from the host; fetching runs no hooks. To get the repo's gates without the team's edits, do what its CI test-tamper job does: run `.claude/agent-gates/verify-diff.sh` from the base commit.
+What it does:
+
+- It reads the run's result and publishes only a `done` run. Add `--include-partial` to publish `partial` work, marked as such in the commit body.
+- It commits every change in the checkout with `team.commit_message`, or `--message <text>`. The commit body names the session, the outcome and the acceptance tests.
+- It runs the repository's commit hooks, so recovery-platform's test-tamper and secret gates apply. A rejected commit is reported as failed, and nothing is pushed.
+- It pushes `HEAD` to `refs/heads/<branch>` on `--remote` (default `origin`). It never pushes to the remote's default branch or `main`/`master`, and never force-pushes: a branch with other history is refused.
+- It refuses to commit any file that looks like it holds secrets (`.env*`, keys, credentials).
+- It prints one JSON object (`{"type":"publish","status":"pushed|skipped|failed","reason",…}`) and exits 0 when pushed, 4 when there was nothing to publish (a run not done, or no changes), 1 on failure and 2 on bad arguments.
+
+**Why a separate step:**
+
+- The GitHub write token is only in a process with no agents in it, and the team's own shell can't push (`git push` is hard-denied in a run). This is the same split pr-review-kit makes between its model step and its publish step.
+- It runs in the container, never on the host, because the repo's hooks call scripts from the working tree that the team could have edited. Run on the host, a commit would run the team's code with the host's access. In the container, it runs where the run did, with only the GitHub token.
+
+Give this container network access to github.com only. To get the repo's gates without the team's edits as well, do what its CI test-tamper job does: run `.claude/agent-gates/verify-diff.sh` from the base commit.
 
 ## 7. Driving it from Hermes
 
@@ -178,7 +193,7 @@ A team run takes minutes to an hour: more than Hermes's default terminal timeout
 - **Through hco (recommended).** `hco`'s detached runner already clones, branches, runs a worker with `--output-format json`, parses `subtype`/`is_error`/`session_id`/`total_cost_usd`/`permission_denials`, and finalizes the kanban card. Swapping its `claude -p …` command (`jobs.build_command`) for the `docker run` above needs these changes:
   - drop `-p`, `--restricted`, `--tools`, `--permission-mode` and `--settings`, since the container and the team's own policy replace them;
   - pass the task with `--file`;
-  - take the commit message from `team.commit_message`, because the team doesn't commit itself as hco's prompt asks a `claude -p` job to.
+  - replace "commit on the branch" in hco's job prompt with the `--publish` step after a `done` result. It commits and pushes the job branch, so hco's `fetch_branch` is only needed for a local copy.
 
   This is not built yet. It's a change in the hermes-claude-orchestration repo.
 

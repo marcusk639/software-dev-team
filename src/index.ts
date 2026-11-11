@@ -3,6 +3,8 @@ import { DEFAULT_ALLOWED_TOOLS, prepareAllowRules } from "./allowlist.js";
 import { changedFiles } from "./changed-files.js";
 import { checkProjectDir, type ParsedArgs, parseArgs, usage } from "./cli.js";
 import { runOutcome } from "./outcome.js";
+import { readFileSync } from "node:fs";
+import { publish } from "./publish.js";
 import { buildJsonResult, buildStartupErrorResult } from "./report.js";
 import { createRenderer } from "./render.js";
 import {
@@ -37,20 +39,32 @@ const JSON_OUTPUT = argv.some(
   (arg, i) => arg === "--output" && argv[i + 1] === "json",
 );
 
+/** --publish always answers in JSON, as an orchestrator's step. */
+const PUBLISH = argv.includes("--publish");
+
 /** A failure before the run started: a message on stderr, and in JSON mode a result object on stdout. */
 function startupError(message: string, code: number, help = ""): number {
   console.error(help ? `${message}\n\n${help}` : message);
-  if (JSON_OUTPUT) {
+  if (PUBLISH) {
+    console.log(
+      JSON.stringify({ type: "publish", status: "failed", reason: message }),
+    );
+  } else if (JSON_OUTPUT) {
     console.log(JSON.stringify(buildStartupErrorResult(message, code)));
   }
   return code;
 }
 
+/** Exit codes for --publish: pushed, failed, nothing to publish. */
+const PUBLISH_EXIT = { pushed: 0, failed: 1, skipped: 4 } as const;
+
 async function main(): Promise<number> {
   let cli: ParsedArgs;
   try {
     cli = parseArgs(argv);
-    if (cli.kind === "run" || cli.kind === "roles") checkProjectDir(cli.cwd);
+    if (cli.kind === "run" || cli.kind === "roles" || cli.kind === "publish") {
+      checkProjectDir(cli.cwd);
+    }
     // Validated now so a bad --allow rule is a usage error, not a failure
     // mid-run. Its warnings are printed by runTeam, with the run's others.
     if (cli.kind === "run") {
@@ -63,6 +77,31 @@ async function main(): Promise<number> {
   if (cli.kind === "help") {
     console.log(usage());
     return 0;
+  }
+
+  if (cli.kind === "publish") {
+    let result: unknown;
+    try {
+      result = JSON.parse(readFileSync(cli.resultFile, "utf8"));
+    } catch (error) {
+      return startupError(
+        `--publish could not read ${cli.resultFile} as JSON: ${(error as Error).message}`,
+        2,
+      );
+    }
+    const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || undefined;
+    const outcome = publish({
+      cwd: cli.cwd,
+      branch: cli.branch,
+      remote: cli.remote,
+      result,
+      includePartial: cli.includePartial,
+      ...(cli.message === undefined ? {} : { message: cli.message }),
+      ...(token === undefined ? {} : { token }),
+    });
+    if (outcome.reason) console.error(outcome.reason);
+    console.log(JSON.stringify(outcome));
+    return PUBLISH_EXIT[outcome.status];
   }
 
   if (cli.kind === "profiles") {

@@ -193,3 +193,24 @@ describe("--output", () => {
   });
 });
 
+describe("--publish", () => {
+  it("takes the result file, the branch and its options", () => {
+    assert.deepEqual(
+      parseArgs(["--publish", "result.json", "--branch", "hco/42-x", "--cwd", "/p", "--remote", "fork", "--include-partial", "--message", "fix: x"]),
+      { kind: "publish", resultFile: "result.json", branch: "hco/42-x", cwd: "/p", remote: "fork", includePartial: true, message: "fix: x" },
+    );
+  });
+
+  it("defaults the remote to origin and needs a branch", () => {
+    const cli = parseArgs(["--publish", "r.json", "--branch", "b"]);
+    assert.ok(cli.kind === "publish");
+    assert.equal(cli.remote, "origin");
+    assert.equal(cli.includePartial, false);
+    assert.throws(() => parseArgs(["--publish", "r.json"]), /--publish needs --branch/);
+  });
+
+  it("is documented in the help", () => {
+    assert.match(usage(), /--publish <result\.json>/);
+  });
+});
+

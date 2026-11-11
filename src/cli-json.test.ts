@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -63,3 +63,39 @@ describe("--output json from the real CLI", () => {
     assert.match(singleJson(stdout).result, /No TTY available/);
   });
 });
+
+describe("--publish from the real CLI", () => {
+  it("commits a done run on the branch, pushes it, and answers in JSON", () => {
+    const base = mkdtempSync(join(tmpdir(), "sdt-cli-publish-"));
+    const remote = join(base, "remote.git");
+    const work = join(base, "work");
+    const g = (cwd: string, ...args: string[]) =>
+      spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, encoding: "utf8" });
+    spawnSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
+    spawnSync("git", ["clone", "-q", remote, work]);
+    g(work, "switch", "-q", "-c", "main");
+    writeFileSync(join(work, "a.txt"), "1\n");
+    g(work, "add", ".");
+    g(work, "commit", "-qm", "init");
+    g(work, "push", "-q", "origin", "main");
+    writeFileSync(join(work, "a.txt"), "2\n");
+    const resultFile = join(base, "result.json");
+    writeFileSync(resultFile, JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: "s", team: { outcome: "done", commit_message: "feat: two" } }));
+
+    const pushed = run(["--publish", resultFile, "--branch", "hco/1-two", "--cwd", work]);
+    assert.equal(pushed.code, 0, pushed.stderr);
+    const json = singleJson(pushed.stdout);
+    assert.equal(json.type, "publish");
+    assert.equal(json.status, "pushed");
+    assert.equal(spawnSync("git", ["log", "-1", "--format=%s", "hco/1-two"], { cwd: remote, encoding: "utf8" }).stdout.trim(), "feat: two");
+
+    const skipped = run(["--publish", resultFile, "--branch", "hco/1-again", "--cwd", work]);
+    assert.equal(skipped.code, 4);
+    assert.equal(singleJson(skipped.stdout).status, "skipped");
+
+    const usageError = run(["--publish", join(base, "missing.json"), "--branch", "b", "--cwd", work]);
+    assert.equal(usageError.code, 2);
+    assert.equal(singleJson(usageError.stdout).status, "failed");
+  });
+});
+
