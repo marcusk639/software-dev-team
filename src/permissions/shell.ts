@@ -1,5 +1,5 @@
-import { existsSync, lstatSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import {
   expandLongOptions,
   gitCloneConfigRuns,
@@ -680,6 +680,58 @@ function substitutionRunsAsCommand(command: string): boolean {
   return new RegExp(String.raw`${MASKED_AT}(?:\$\((?!\()|\x60)`).test(masked);
 }
 
+/** git's global options that take their value as the next word. */
+const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"]);
+
+/**
+ * True when `git diff` or `git grep` would read files outside the project:
+ * either one with --no-index, which compares or searches any file; git diff
+ * with a path outside the work tree, which switches to --no-index unasked;
+ * or either one run from outside the project (`git -C /`). An allow rule for
+ * `git diff` would otherwise approve a read the file tools refuse. A path
+ * the text cannot judge (`~`, a variable) counts as outside.
+ */
+function gitReadsOutside(command: string, cwd: string | undefined): boolean {
+  const roots =
+    cwd === undefined
+      ? []
+      : [...new Set([resolve(cwd), (() => { try { return realpathSync(cwd); } catch { return resolve(cwd); } })()])];
+  const outside = (base: string | undefined, word: string): boolean => {
+    if (/^~|\$/.test(word)) return true;
+    if (base === undefined) {
+      return /^\//.test(word) || /(^|\/)\.\.(\/|$)/.test(word);
+    }
+    const path = resolve(base, word);
+    return !roots.some((root) => path === root || path.startsWith(root + sep));
+  };
+  return command.split(/&&|\|\||[|;&\n]/).some((segment) => {
+    const words = segment.trim().split(/\s+/).map(dequote).filter(Boolean);
+    let i = words.findIndex((word) => /^(?:\S*\/)?git$/.test(word));
+    if (i < 0) return false;
+    let base = cwd === undefined ? undefined : resolve(cwd);
+    let away = false;
+    for (i += 1; i < words.length && words[i]!.startsWith("-"); i += 1) {
+      const [option, attached] = words[i]!.split(/=(.*)/s, 2) as [string, string | undefined];
+      const value = attached ?? (GIT_VALUE_OPTIONS.has(option) ? words[++i] : undefined);
+      if (value === undefined) continue;
+      if (option === "-C") {
+        away ||= outside(base, value);
+        if (base !== undefined) base = resolve(base, value);
+      } else if (option === "--git-dir" || option === "--work-tree") {
+        away ||= outside(base, value);
+      }
+    }
+    const sub = words[i];
+    if (sub !== "diff" && sub !== "grep") return false;
+    const args = words.slice(i + 1);
+    if (away || args.includes("--no-index")) return true;
+    if (sub === "grep") return false;
+    const dash = args.indexOf("--");
+    const operands = args.filter((arg, k) => (dash >= 0 && k > dash) || (!arg.startsWith("-") && k !== dash));
+    return operands.some((operand) => outside(base, operand));
+  });
+}
+
 /**
  * `git rm -r` without `--cached` deletes the files. The words are read as
  * git sees them (quotes removed, a `#` word ends the command), and only
@@ -736,6 +788,9 @@ export function bashDenyReason(command: string, cwd?: string): string | null {
       : undefined) ??
     (normalized.some((form) => checkoutDiscards(form, cwd))
       ? "git checkout with a path discards uncommitted changes"
+      : undefined) ??
+    (forms.some((form) => gitReadsOutside(form, cwd))
+      ? "git diff or git grep reading files outside the project"
       : undefined) ??
     forms.map(gitGlobalOptionReason).find(Boolean) ??
     (forms.some(gitConfigWrites) || forms.some(gitCloneConfigRuns)

@@ -239,3 +239,35 @@ describe("review round 1: code that runs outside the run is not the team's to wr
   });
 });
 
+
+describe("security review: git diff and git grep read only the project", () => {
+  // `Bash(git diff:*)` is pre-approved, so these would read outside the
+  // project with no approval: git diff compares any two files with
+  // --no-index, and switches to it unasked when a path is outside the work tree.
+  for (const command of [
+    "git diff --no-index /etc/passwd /dev/null",
+    "git diff --no-index src/a.ts src/b.ts",
+    "git diff /etc/hosts /dev/null",
+    "git diff -- /etc/hosts src/a.ts",
+    "git diff ~/.config/configstore/firebase-tools.json src/a.ts",
+    "git diff ../outside.txt src/a.ts",
+    'git diff "$HOME/.bash_history" src/a.ts',
+    "git -C / diff etc/passwd dev/null",
+    "git -C / diff --no-index etc/passwd /dev/null",
+    "git grep --no-index -e token /run/secrets",
+    "npm --prefix src test && git diff /etc/hosts /dev/null",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /outside the project/);
+    });
+  }
+  allows([
+    "git diff",
+    "git diff HEAD~1",
+    "git diff main..HEAD -- src/a.ts",
+    "git diff origin/main...HEAD --stat",
+    `git diff -- ${join(project, "src/a.ts")}`,
+    "git diff --cached -U5 src",
+    "git grep -n token src",
+  ]);
+});
