@@ -74,7 +74,7 @@ export interface JsonResultInput {
   notices: readonly string[];
   /** `git status` paths in --cwd after the run, or null outside a git checkout. */
   changedFiles: readonly string[] | null;
-  /** The files qa-tester wrote: the run's acceptance contract. */
+  /** The test files qa-tester wrote: the run's acceptance contract. */
   acceptanceTests: readonly string[];
 }
 

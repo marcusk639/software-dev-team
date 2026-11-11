@@ -214,3 +214,38 @@ describe("review round 1: the same file under another name is still the test", (
   });
 });
 
+describe("review round 2: only tests are locked, not the stubs qa-tester adds", () => {
+  it("leaves a source stub qa-tester wrote editable by the engineer who implements it", async () => {
+    const cwd = project();
+    const authorship = createTestAuthorship({ cwd });
+    await fire(authorship, "PostToolUse", "qa-tester", "Write", { file_path: "src/export.ts" });
+    await fire(authorship, "PostToolUse", "qa-tester", "Write", { file_path: "src/__tests__/export.test.ts" });
+    assert.equal(
+      await fire(authorship, "PreToolUse", "backend-engineer", "Edit", { file_path: "src/export.ts" }),
+      undefined,
+    );
+    assert.ok(await fire(authorship, "PreToolUse", "backend-engineer", "Edit", { file_path: "src/__tests__/export.test.ts" }));
+    assert.deepEqual(authorship.files(), ["src/__tests__/export.test.ts"]);
+  });
+
+  it("treats the usual test layouts as tests", async () => {
+    const cwd = project();
+    const authorship = createTestAuthorship({ cwd });
+    const tests = [
+      "src/a.test.ts",
+      "src/b.spec.tsx",
+      "web/c.spec.js",
+      "src/__tests__/d.ts",
+      "e2e/screens/e.e2e.ts",
+      "mobile/maestro/flows/login.yaml",
+      "test/f.mjs",
+      "functions/tests/g.ts",
+      "regroup/mobile/src/h.integration.test.ts",
+    ];
+    for (const file_path of [...tests, "src/stub.ts", "src/testing-utils.ts", "README.md"]) {
+      await fire(authorship, "PostToolUse", "qa-tester", "Write", { file_path });
+    }
+    assert.deepEqual(authorship.files(), [...tests].sort());
+  });
+});
+

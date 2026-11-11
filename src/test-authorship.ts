@@ -8,6 +8,16 @@ import { isOneOf, isRecord, WRITE_TOOLS } from "./tools.js";
 export const TEST_AUTHOR = "qa-tester";
 
 /**
+ * A test file, by the layouts test runners use: `*.test.*`, `*.spec.*` and
+ * `*.e2e.*` files, and anything under `__tests__/`, `test/`, `tests/`,
+ * `e2e/` or `maestro/`. This matches the test paths recovery-platform's own
+ * implementer gate protects. Only these are locked: a source stub qa-tester
+ * adds so a test can load is the engineer's to implement.
+ */
+export const TEST_PATH =
+  /(^|\/)(__tests__|e2e|\.?maestro|tests?)\/|\.(test|spec|e2e)\.[cm]?[jt]sx?$/i;
+
+/**
  * The path a file would have once every symlink is resolved, so `a/../x`,
  * `./x` and a symlinked directory all name the same file. A file that does
  * not exist yet resolves through its nearest existing parent.
@@ -41,8 +51,8 @@ const deny = (reason: string) => ({
 
 /**
  * Keeps the tests qa-tester writes in a run as the acceptance contract: once
- * qa-tester has written a file with a file tool, any other role's file-tool
- * write to it is denied, so an engineer cannot reach green by editing the
+ * qa-tester has written a test file (TEST_PATH) with a file tool, any other
+ * role's file-tool write to it is denied, so an engineer cannot reach green by editing the
  * test instead of the code. A write counts once it succeeded (PostToolUse).
  * A file is matched by its identity (device and inode), so a hard link, a
  * renamed directory or another case on a case-insensitive filesystem is
@@ -57,7 +67,7 @@ export function createTestAuthorship(options: {
   onDeny?: (toolUseId: string, reason: string) => void;
 }): {
   hooks: Record<"PreToolUse" | "PostToolUse", HookCallbackMatcher[]>;
-  /** The files qa-tester wrote, relative to the project, sorted. */
+  /** The test files qa-tester wrote, relative to the project, sorted. */
   files: () => string[];
 } {
   const root = canonical(resolve(options.cwd));
@@ -113,7 +123,7 @@ export function createTestAuthorship(options: {
                 input.agent_type === TEST_AUTHOR
               ) {
                 const path = pathOf(input.tool_input);
-                if (path !== undefined) {
+                if (path !== undefined && TEST_PATH.test(relative(root, path))) {
                   owned.add(path);
                   const id = identity(path);
                   if (id !== undefined) ownedIds.add(id);

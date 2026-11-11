@@ -267,12 +267,14 @@ main().then(
   (error: unknown) => {
     // Configuration mistakes (a misnamed customization file, a missing prompt)
     // reach here; their message is what the user needs. DEBUG=1 shows the stack.
+    // Nothing ran yet (runTeam catches a failing stream itself), so this is a
+    // startup error: exit 2, as for bad arguments.
     const message =
       error instanceof Error
         ? process.env.DEBUG
           ? (error.stack ?? error.message)
           : error.message
         : String(error);
-    exitAfterFlush(startupError(message, 1));
+    exitAfterFlush(startupError(message, 2));
   },
 );

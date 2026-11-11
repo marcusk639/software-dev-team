@@ -141,7 +141,7 @@ export interface RunSummary extends Summary {
   warnings: readonly string[];
   /** Informational notes the run started with (also sent to onWarning); not counted by --strict. */
   notices: readonly string[];
-  /** The files qa-tester wrote: the run's acceptance tests, which no other role could edit. */
+  /** The test files qa-tester wrote: the run's acceptance tests, which no other role could edit. */
   acceptanceTests: readonly string[];
 }
 

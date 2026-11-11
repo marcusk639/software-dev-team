@@ -128,7 +128,7 @@ regroup's rules suite needs running emulators, and its documented command was a 
 
 **Finding.** With the workflow above in prompt text only, an engineer could still edit a failing acceptance test until it passed.
 
-**Change.** `src/test-authorship.ts`, wired into every run: once qa-tester writes a file, other roles' Write, Edit, MultiEdit and NotebookEdit calls to it are denied. The denial gives a reason that tells the engineer to report a wrong test as a spec gap. A file is matched by device and inode as well as by canonical path, so a hard link, a renamed directory or a case variant (APFS, or a Docker bind mount from macOS) is still the same test. Those three were bypasses until the security review found them; see §4. A file deleted and rewritten is matched by path. Shell edits aren't tracked, and the documentation says so: the reviewer's checks and the repository's commit gate cover them.
+**Change.** `src/test-authorship.ts`, wired into every run: once qa-tester writes a test file, other roles' Write, Edit, MultiEdit and NotebookEdit calls to it are denied. The denial gives a reason that tells the engineer to report a wrong test as a spec gap. A file is matched by device and inode as well as by canonical path, so a hard link, a renamed directory or a case variant (APFS, or a Docker bind mount from macOS) is still the same test. Those three were bypasses until the security review found them; see §4. A file deleted and rewritten is matched by path. Shell edits aren't tracked, and the documentation says so: the reviewer's checks and the repository's commit gate cover them.
 
 **Tests.** `src/test-authorship.test.ts` (9 cases), and `src/orchestrator/wiring.test.ts`, which runs the lock through a run's own hook lists.
 
