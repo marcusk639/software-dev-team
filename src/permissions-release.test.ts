@@ -328,3 +328,45 @@ describe("security review: pre-approved npm commands keep npm's own settings", (
     "npm test",
   ]);
 });
+
+describe("security review round 3: a cd may fail, not persist, or be spelled another way", () => {
+  // The hook can't know where git really runs after a cd, so an operand must
+  // be inside the project from the original directory and from every
+  // directory a cd could reach, and a cd to somewhere unknown counts as outside.
+  for (const command of [
+    "(cd src/a/b); git diff ../../../etc/passwd ../../../dev/null",
+    "cd missing/a/b; git diff ../../../etc/passwd x",
+    "cd src/a/b || git diff ../../../etc/passwd x",
+    "cd src/a/b | true; git diff ../../../etc/passwd x",
+    "cd src/a/b & git diff ../../../etc/passwd x",
+    "env -C/ git diff etc/passwd dev/null",
+    "env -iC/ git diff etc/passwd dev/null",
+    "env --chd=/ git diff etc/passwd dev/null",
+    "env --chdi / git diff etc/passwd dev/null",
+    "builtin cd / && git diff etc/passwd dev/null",
+    "command cd / && git diff etc/passwd dev/null",
+    "CDPATH=/ cd etc && git diff passwd hosts",
+    "if cd /; then git diff etc/passwd dev/null; fi",
+    "echo $(cd / && git diff etc/passwd dev/null)",
+    "popd && git diff a b",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /outside the project/);
+    });
+  }
+  allows(["cd src && git diff a.ts", "git grep cd", "git diff -- src/cd.ts", "git log --grep cd"]);
+});
+
+describe("security review round 3: npm node-options", () => {
+  for (const command of [
+    "npm --prefix recovery-api test --node-options=--require=/tmp/x.js",
+    "npm --prefix recovery-api test --nod=--require=/tmp/x.js",
+    "npm --prefix recovery-api test --node-o --require=/tmp/x.js",
+    "npm_config_node_options=--require=/tmp/x.js npm --prefix recovery-api test",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /npm's shell, config or package directory/);
+    });
+  }
+  allows(["npm --prefix recovery-api test --no-coverage"]);
+});

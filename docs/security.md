@@ -42,7 +42,11 @@ Status: **fixed** (closed, with its test), **mitigated** (narrowed, residual ris
 
 The recovery-platform profile pre-approves `Bash(git diff:*)`. `git diff --no-index /etc/passwd /dev/null` printed any file with no approval, and inside a repository `git diff /etc/hosts /dev/null` switches to `--no-index` without being asked. That reached files the secret list misses (S2).
 
-**Fix:** `gitReadsOutside` in `src/permissions/shell.ts` refuses `git diff` and `git grep` with `--no-index` or any abbreviation git accepts (`--no-in`…), `git diff` with a path operand outside the project, and either one run from outside it through `-C`, `--git-dir`, `--work-tree`, `env -C` / `--chdir`, or an earlier `cd` / `pushd` in the same command. Tests: `src/permissions-release.test.ts`, "security review" suites.
+**Fix:** `gitReadsOutside` in `src/permissions/shell.ts` refuses `git diff` and `git grep` with `--no-index` or any abbreviation git accepts (`--no-in`…), `git diff` with a path operand outside the project, and either one run from outside it through `-C`, `--git-dir`, `--work-tree`, or env's chdir option in any spelling (`-C/`, `-iC/`, `--chd=`).
+
+A directory change elsewhere in the command is judged conservatively, because the hook can't know where git really runs: a `cd` may fail, run in a subshell, or sit on the other side of `||`. So an operand must stay inside the project from the original directory and from every directory a `cd`, `pushd` or `popd` in the command could reach, including one after `builtin`, `command`, `if`/`then`/`do` or inside `$(…)`. A `cd` to anywhere unknown (outside, `-`, a bare `cd`, `popd`, a variable, any `CDPATH`) counts as outside.
+
+The abbreviation, directory-change and spelling cases came from the PR reviewer's private advisories on #13. Tests: `src/permissions-release.test.ts`, "security review" suites.
 
 ### S2. Bash reads are confined only by approval and a name-based secret list (mitigated)
 
@@ -65,7 +69,7 @@ The hook checks redirect targets only against protected paths (`git log > .husky
 **Mitigation:**
 
 - The container is the boundary: no credentials but the model key (S9), no network beyond the API.
-- npm can't be pointed at other code: the hook refuses `--script-shell`, `--userconfig`, `--globalconfig`, a second `--prefix` or `-C`, any abbreviation npm accepts (`--scr`, `--userc`, `--prefi`), and the matching `npm_config_*` variables (`NPM_CONFIG_OVERRIDES` in `src/permissions/shell.ts`). `.npmrc` is a secret path, so the team can't write it either.
+- npm can't be pointed at other code: the hook refuses `--script-shell`, `--userconfig`, `--globalconfig`, a second `--prefix` or `-C`, `--node-options` (which sets `NODE_OPTIONS` for the scripts, so `--require=<file>` loads any code), any abbreviation npm accepts (`--scr`, `--nod`, `--userc`, `--prefi`), and the matching `npm_config_*` variables (`NPM_CONFIG_OVERRIDES` in `src/permissions/shell.ts`). `.npmrc` is a secret path, so the team can't write it either.
 - A person reviews `changed_files` before merging, so a change to `package.json` scripts or a test config is visible.
 
 ### S5. `--allow` accepts rules that approve almost anything (open, accepted for now)
@@ -96,9 +100,9 @@ The commit ran with `GITHUB_TOKEN` in its environment, and `git push` ran the re
 
 **Fix** (`src/publish.ts`):
 
-- Hooks run with an environment that has no `GITHUB_TOKEN`, `GH_TOKEN` or any variable holding the token.
+- Every git call the step makes runs without `GITHUB_TOKEN`, `GH_TOKEN` or any variable holding the token. The branch switch, add and reset can run hooks too (`reference-transaction`, `post-checkout`), not only the commit.
 - The step runs pre-push itself, with the arguments and stdin `git push` would give it (`git hook run --to-stdin`).
-- Only then does it run `git push --no-verify`, the one process that has the token.
+- Only then does it push, the one process that has the token, with no hooks at all: `--no-verify` skips pre-push, and `core.hooksPath=/dev/null` skips the `reference-transaction` hook that updating the remote-tracking ref would run.
 
 Tests: `src/publish.test.ts`, "publish keeps the push token from the repository's hooks".
 

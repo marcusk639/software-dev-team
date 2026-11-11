@@ -280,6 +280,19 @@ describe("publish keeps the push token from the repository's hooks", () => {
     assert.equal(remoteLog(remote, "hco/7-x").split("\n")[0], "feat(api): add the export endpoint");
   });
 
+  it("runs no hook while the push holds the token, not even reference-transaction", () => {
+    const { cwd } = project();
+    const seen = join(cwd, "..", "seen.ref");
+    hook(cwd, "reference-transaction", `env >> "${seen}"`);
+    writeFileSync(join(cwd, "src/a.ts"), "x\n");
+    const out = withEnvToken(() => publish({ cwd, branch: "b", result: result("done"), token: TOKEN }));
+    assert.equal(out.status, "pushed", out.reason ?? "");
+    // The commit and branch switch still run it, without the token.
+    const env = readFileSync(seen, "utf8");
+    assert.doesNotMatch(env, new RegExp(TOKEN));
+    assert.doesNotMatch(env, /extraheader|GIT_CONFIG_VALUE/i);
+  });
+
   it("pushes nothing when pre-push rejects, and says why", () => {
     const { cwd, remote } = project();
     hook(cwd, "pre-push", "echo 'tests failed in recovery-api' >&2; exit 1");

@@ -49,14 +49,21 @@ const DEFAULT_NAMES = new Set(["main", "master"]);
 function git(
   cwd: string,
   args: string[],
-  options: { input?: string; env?: NodeJS.ProcessEnv; raw?: boolean } = {},
+  options: {
+    input?: string;
+    /** Default: this process's environment without the GitHub token. */
+    env?: NodeJS.ProcessEnv;
+    raw?: boolean;
+  } = {},
 ): string {
   const out = execFileSync("git", args, {
     cwd,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
     ...(options.input === undefined ? {} : { input: options.input }),
-    ...(options.env === undefined ? {} : { env: options.env }),
+    // Never the token by default: a switch, an add or a reset can run the
+    // repository's hooks (reference-transaction, post-checkout) too.
+    env: options.env ?? withoutToken(process.env, undefined),
   });
   // Porcelain output starts with a status column that may be a space.
   return options.raw ? out : out.trim();
@@ -116,8 +123,9 @@ const ZERO = "0".repeat(40);
 /**
  * Runs the pre-push hook as `git push` would (the remote and its URL as
  * arguments, the ref line on stdin) but in an environment without the
- * token. The push itself then skips it (--no-verify): any token git can push
- * with is readable by the hooks git push runs.
+ * token. The push itself then runs no hook at all (--no-verify, and an empty
+ * hooks path for reference-transaction): any token git can push with is
+ * readable by the hooks git push runs.
  */
 function prePush(
   root: string,
@@ -379,6 +387,11 @@ export function publish(options: PublishOptions): PublishResult {
     git(
       root,
       [
+        // No hooks at all while the token is in git's environment:
+        // --no-verify skips only pre-push, and updating the remote-tracking
+        // ref would still run reference-transaction.
+        "-c",
+        "core.hooksPath=/dev/null",
         "push",
         "--quiet",
         "--no-verify",
