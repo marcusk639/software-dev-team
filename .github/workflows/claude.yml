@@ -35,6 +35,12 @@ jobs:
         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) &&
         contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
+    # One run per issue or PR at a time: two mentions in quick succession would
+    # otherwise push conflicting commits to the same branch. Queued, not
+    # cancelled, so neither request is dropped.
+    concurrency:
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -44,35 +50,48 @@ jobs:
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
     steps:
-      # Agent-authored PRs must not reach the secret-bearing steps below: an
-      # agent wrote their head, so it must never steer this job. Here those are
-      # the Hermes/hco job branches (hco/*), plus e2e-fix/* as in
-      # recovery-platform. Review events carry the head ref in the payload;
-      # issue_comment needs a lookup; plain issues have no PR.
-      - name: Skip agent-authored branches
+      # Code its author controls must not reach the secret-bearing steps
+      # below, because Claude runs this repo's tests (pnpm test runs the
+      # head's package.json script and test files) while it holds the GitHub
+      # App token and the Anthropic credential. Two cases:
+      # - A PR from a fork: its author chose every file, whoever commented
+      #   @claude. Skipped whatever its branch is called.
+      # - An agent-authored branch here: the Hermes/hco job branches (hco/*),
+      #   plus e2e-fix/*, kept for parity with recovery-platform.
+      # Review events carry the head in the payload; issue_comment needs a
+      # lookup; plain issues have no PR.
+      - name: Skip forks and agent-authored branches
         id: pr-head
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           REVIEW_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          REVIEW_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          head_ref=""
+          is_pr=false head_ref="" head_repo=""
           if [ "$EVENT_NAME" = "issue_comment" ]; then
             # Any lookup failure exits non-zero (bash -e), failing the step and
             # skipping every later step: fail-closed.
             pr_url=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}" --jq '.pull_request.url // empty')
             if [ -n "$pr_url" ]; then
-              head_ref=$(gh api "repos/${REPO}/pulls/${ISSUE_NUMBER}" --jq '.head.ref')
+              is_pr=true
+              head=$(gh api "repos/${REPO}/pulls/${ISSUE_NUMBER}" --jq '[.head.ref, (.head.repo.full_name // "")] | @tsv')
+              IFS=$'\t' read -r head_ref head_repo <<< "$head"
             fi
           elif [ "$EVENT_NAME" = "pull_request_review" ] || [ "$EVENT_NAME" = "pull_request_review_comment" ]; then
-            head_ref="$REVIEW_HEAD_REF"
+            is_pr=true head_ref="$REVIEW_HEAD_REF" head_repo="$REVIEW_HEAD_REPO"
+          fi
+          skip=false
+          # A deleted fork has no head repository: empty, so skipped too.
+          if [ "$is_pr" = true ] && [ "$head_repo" != "$REPO" ]; then
+            skip=true; echo "PR head is in ${head_repo:-a deleted repository}, not $REPO: skipped"
           fi
           case "$head_ref" in
-            hco/*|e2e-fix/*) echo "skip=true" >> "$GITHUB_OUTPUT"; echo "Agent-authored branch $head_ref: skipped" ;;
-            *) echo "skip=false" >> "$GITHUB_OUTPUT" ;;
+            hco/*|e2e-fix/*) skip=true; echo "Agent-authored branch $head_ref: skipped" ;;
           esac
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
         if: steps.pr-head.outputs.skip != 'true'
@@ -83,7 +102,9 @@ jobs:
 
       # So Claude can run this repo's checks (pnpm test, pnpm typecheck) on
       # what it changes. --ignore-scripts: no dependency's install script runs
-      # in a job that can mint the OIDC token.
+      # in a job that can mint the OIDC token. On a PR comment this installs
+      # the default branch's dependencies (the action switches to the PR head
+      # afterwards), so a PR that changes them is checked against main's.
       - name: Set up Node
         if: steps.pr-head.outputs.skip != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
