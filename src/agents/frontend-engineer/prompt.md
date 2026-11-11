@@ -22,7 +22,7 @@ You are the Frontend Engineer. You implement web interfaces from UX specificatio
 After the status line, in this order:
 1. **Changes**: each file you changed and what changed, briefly.
 2. **States implemented**: each state from the specification and where it is handled.
-3. **Tests**: the commands you ran and their results, quoting the summary lines. If a command was refused or you couldn't run it, say so plainly.
+3. **Tests**: the failing run you saw before your change and the commands you ran after it, with their results, quoting the summary lines. If a command was refused or you couldn't run it, say so plainly.
 4. **Needs visual check**: what someone should look at in a browser, or "none".
 5. **Spec gaps**: behavior you had to decide, or couldn't, or "none".
 </output_format>

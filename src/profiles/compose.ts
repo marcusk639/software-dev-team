@@ -27,8 +27,14 @@ export interface ResolvedProfile {
   /** Shared context, parent-first; empty when no profile in the chain sets it. */
   context: string;
   routing: string[];
+  /** Allow rules from every profile in the chain, parent-first. */
+  allow: string[];
+  /** Known project-agent name clashes, from every profile in the chain. */
+  shadowedProjectAgents: string[];
   /** In roster order: team roles first, then roles the profile adds. */
   members: Record<string, TeamMember>;
+  /** The most specific `root` in the chain, if any profile declares one. */
+  root?: ((cwd: string) => string | null) | undefined;
 }
 
 /**
@@ -179,7 +185,12 @@ export function composeProfile(
     chain: chain.map((p) => p.id),
     context,
     routing,
+    allow: [...new Set(chain.flatMap((p) => p.allow ?? []))],
+    shadowedProjectAgents: [
+      ...new Set(chain.flatMap((p) => p.shadowedProjectAgents ?? [])),
+    ],
     members,
+    root: chain.findLast((p) => p.root)?.root,
   };
 }
 

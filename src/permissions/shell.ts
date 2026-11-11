@@ -38,6 +38,78 @@ const ASSIGNMENTS = String.raw`(?:\w+=\S*\s+)*`;
 const ENDS = String.raw`[ \t]*($|[|;&<>)}\x60\n])`;
 
 /**
+ * The end of a command word: not followed by more of a word, so `git push`
+ * ends before `;`, `)`, `|`, `>` or a backtick as well as before a space,
+ * while `eas build:list` and `deploy-preview.md` are different words.
+ */
+const END = String.raw`(?![\w:.@/=-])`;
+/** `env`, with its options and assignments, in front of a command. */
+const ENV = String.raw`(?:(?:\S*\/)?env(?:\s+(?:-[uCS]\s*\S+|-\S+|\w+=\S*))*\s+)?`;
+/**
+ * How a program is launched: through a package runner (`npx -y`,
+ * `pnpm exec`, `yarn dlx`, `bunx`), a package manager's bare bin lookup
+ * (`pnpm firebase`), or `node` on its script.
+ */
+const LAUNCHER = String.raw`(?:(?:npx|pnpx|bunx)(?:\s+-\S+)*\s+|(?:npm|pnpm|yarn|bun)\s+(?:exec|dlx|x)(?:\s+-\S+)*\s+(?:--\s+)?|(?:pnpm|yarn|bun)\s+|node(?:\s+-\S+)*\s+)?`;
+/**
+ * A program at a command position, however it is launched: path-qualified,
+ * after leading assignments or `env`, through a launcher, as its `.js`
+ * script, or pinned to a version (`firebase-tools@13`).
+ */
+const program = (names: string) =>
+  String.raw`${AT}${ASSIGNMENTS}${ENV}${ASSIGNMENTS}${LAUNCHER}(?:\S*\/)?(?:${names})(?:\.[cm]?js)?(?:@\S+)?`;
+/** A package-manager invocation's options, values included. */
+const PM_OPTIONS = String.raw`(?:\s+-\S+(?:[ =][^\s-]\S*)?)*`;
+const GH_OPTIONS = String.raw`(?:\s+(?:-R|--repo|--hostname)(?:\s+|=)\S+)*`;
+
+/**
+ * Commands that act outside the working tree on something shared or live:
+ * deploys, destructive operations on cloud projects, cloud builds, pushes,
+ * pull requests, releases and CI dispatch. The team builds and verifies; the
+ * operator (or the orchestrator that runs the team) ships after review. Only
+ * a command position counts, so `grep "firebase deploy" docs/` stays allowed.
+ * Best-effort like every pattern here: a script that wraps a deploy is caught
+ * only by name (`npm run *deploy*`), and an interpreter one-liner not at all,
+ * which is why a run's environment must not hold production credentials
+ * (docs/deployment.md).
+ */
+const RELEASE_COMMANDS: readonly RegExp[] = [
+  [String.raw`${program("firebase|firebase-tools")}(?:\s+[^|;&\n]*)?\s(?:deploy|hosting:channel:deploy|hosting:disable|functions:delete|functions:config:(?:set|unset)|functions:secrets:(?:set|destroy)|firestore:delete|firestore:databases:delete|database:(?:remove|set|update|push)|auth:import|remoteconfig:rollback|projects:delete|appdistribution:distribute|ext:(?:install|uninstall|update))${END}`],
+  [String.raw`${AT}${ASSIGNMENTS}${ENV}(?:\S*\/)?(?:npm|pnpm|yarn|bun)${PM_OPTIONS}\s+(?:run(?:-script)?${PM_OPTIONS}\s+)?['"]?[\w:.@/-]*deploy[\w:.-]*['"]?${END}`],
+  [String.raw`${program("gcloud")}(?:\s+[^|;&\n]*)?\s(?:deploy|delete|submit|rm)${END}`],
+  [String.raw`${program("gsutil")}(?:\s+-\S+)*\s+(?:rm|rb)${END}`],
+  [String.raw`${program("eas|eas-cli")}(?:\s+-\S+)*\s+(?:build|submit|update|deploy)${END}`],
+  [String.raw`${AT}${ASSIGNMENTS}${ENV}(?:bundle\s+exec\s+)?(?:\S*\/)?fastlane${END}`],
+  [String.raw`${program("vercel")}(?:${ENDS}|(?:\s+-\S+)*\s+(?:deploy|promote|rollback|remove|rm)${END}|[^|;&\n]*\s--prod${END})`],
+  [String.raw`${program("railway")}(?:\s+-\S+)*\s+(?:up|down|delete|redeploy)${END}`],
+  [String.raw`${program("netlify")}(?:\s+-\S+)*\s+deploy${END}`],
+  [String.raw`${program("stripe")}[^|;&\n]*\s--live${END}`],
+  [String.raw`${program("terraform|tofu")}(?:\s+-\S+)*\s+(?:apply|destroy|import)${END}`],
+  [String.raw`${program("kubectl")}(?:\s+-\S+(?:\s+[^\s-]\S*)?)*\s+(?:apply|delete|create|replace|patch|scale)${END}`],
+  [String.raw`${program("docker|podman")}(?:\s+-\S+)*\s+(?:push|image\s+push)${END}`],
+  [String.raw`${program("pulumi")}(?:\s+-\S+)*\s+(?:up|update|destroy)${END}`],
+  [String.raw`${program("wrangler")}(?:\s+-\S+)*\s+(?:deploy|publish|delete)${END}`],
+  [String.raw`${program("serverless|sls|cdk")}(?:\s+-\S+)*\s+(?:deploy|destroy|remove)${END}`],
+  [String.raw`${AT}${ASSIGNMENTS}${ENV}(?:\S*\/)?\\?git\s+(?:push|send-pack|http-push|svn\s+dcommit)${END}`],
+  [String.raw`${program("gh")}${GH_OPTIONS}\s+(?:pr\s+(?:create|merge|close|edit|ready|reopen)|release\s+(?:create|upload|edit|delete)|workflow\s+run|repo\s+(?:create|edit|rename|archive))${END}`],
+  // gh api writes to pull requests, merges, releases, refs and dispatches:
+  // an explicit write method, or fields (which make gh send a POST).
+  [String.raw`${program("gh")}${GH_OPTIONS}\s+api\b(?=[^|;&\n]*\/(?:pulls|merges|releases|dispatches|git\/refs|forks)\b)(?=[^|;&\n]*(?:\s-X\s*|\s--method[ =]\s*)(?:POST|PUT|PATCH|DELETE)\b|[^|;&\n]*\s(?:-[fF]|--field|--raw-field|--input)(?:\s|=))`, "i"],
+].map(([source, flags]) => new RegExp(source!, flags));
+
+/**
+ * git's read commands write a file with --output, and run a program with
+ * --open-files-in-pager: a write the file-tool checks never see, reached
+ * through an allow rule for a read (`Bash(git diff:*)`).
+ */
+const GIT_READ_WRITES = new RegExp(
+  String.raw`${AT}${ASSIGNMENTS}${ENV}(?:\S*\/)?\\?git\s+(?:diff|log|show|format-patch|whatchanged|range-diff|grep|blame|cherry)\b[^|;&\n]*\s--(?:output(?:-directory)?|open-files-in-pager)(?=[\s=]|$)`,
+);
+
+const RELEASE_WHY =
+  "deploys, publishes or pushes: the operator ships after reviewing the team's work";
+
+/**
  * Commands that are never allowed, in any permission mode. Matched against
  * several spellings of the Bash string (see spellings()) so a compound command
  * or a quoting trick cannot smuggle one past the check. `[^|;&\n]*` keeps a
@@ -243,6 +315,17 @@ const HARD_DENY: Array<{
     why: "publishes to a registry",
   },
   { pattern: />\s*\/dev\/[sh]d[a-z]/, why: "writes to a raw device" },
+  {
+    pattern: GIT_READ_WRITES,
+    why: "a git read command that writes files or runs a program",
+    normalizedOnly: true,
+  },
+  ...RELEASE_COMMANDS.map((pattern) => ({
+    pattern,
+    why: RELEASE_WHY,
+    // `git -C . push` is git's push once -C is dropped.
+    normalizedOnly: true,
+  })),
 ];
 
 /** Quotes and backslashes removed: `r''m`, `"rm"` and `\rm` all run rm. */
@@ -265,7 +348,6 @@ function spellings(raw: string): string[] {
 /** `echo .env >> .gitignore` names a secret file without reading it. */
 const IGNORE_FILE_APPEND =
   /^\s*(echo|printf)\s[^|;&<>`$]*>>?\s*(\S*\/)?\.(git|docker)ignore\s*$/i;
-
 
 /**
  * Ways to print the process environment, which holds the API key. Scripts and
@@ -310,6 +392,10 @@ const CONFIG_MENTION = [
   /\.config\/git\//i,
   /\$\{?XDG_CONFIG_HOME\}?\/git\//i,
   /(^|[^\w.-])CLAUDE(\.local)?\.md\b/i,
+  // Code that runs outside the run (paths.ts OUTSIDE_RUN_WRITE).
+  /\.github\/workflows\b/i,
+  /(^|[^\w.-])\.(husky|githooks)(?=$|[/\s"'|;&)<>,}])/i,
+  /\bscripts\/git-hooks\b/i,
 ];
 
 /**
@@ -445,39 +531,37 @@ function expandVariables(word: string): string {
  * `../.env`). Read-only commands are checked too: reading is the leak.
  */
 function wordsReachSecret(command: string, cwd: string | undefined): boolean {
-  return command
-    .split(/&&|\|\||[|;&\n]/)
-    .some((segment) => {
-      const words = segment.split(SHELL_WORD_SPLIT).filter(Boolean);
-      // These print names, not contents: `ls -d .*` lists, it does not read.
-      if (NAME_ONLY.has(words[0] ?? "")) return false;
-      return words.some((spelled) => {
-        const word = expandVariables(spelled);
-        if (/[?*[{]/.test(word)) return isSecretWord(word);
-        if (cwd === undefined || word.includes("$")) return false;
-        if (word.startsWith("-")) {
-          // `-Fpath` / `-Fmpath` (git commit -F, -t; grep -f…): a clustered
-          // option that takes a file takes the rest of the word as its path.
-          const cluster = /^-([a-zA-Z]*?)([Ftf])(.+)$/.exec(word);
-          return (
-            cluster !== null &&
-            !/[mCce]/.test(cluster[1]!) &&
-            isSecretPath(cwd, cluster[3]!)
-          );
+  return command.split(/&&|\|\||[|;&\n]/).some((segment) => {
+    const words = segment.split(SHELL_WORD_SPLIT).filter(Boolean);
+    // These print names, not contents: `ls -d .*` lists, it does not read.
+    if (NAME_ONLY.has(words[0] ?? "")) return false;
+    return words.some((spelled) => {
+      const word = expandVariables(spelled);
+      if (/[?*[{]/.test(word)) return isSecretWord(word);
+      if (cwd === undefined || word.includes("$")) return false;
+      if (word.startsWith("-")) {
+        // `-Fpath` / `-Fmpath` (git commit -F, -t; grep -f…): a clustered
+        // option that takes a file takes the rest of the word as its path.
+        const cluster = /^-([a-zA-Z]*?)([Ftf])(.+)$/.exec(word);
+        return (
+          cluster !== null &&
+          !/[mCce]/.test(cluster[1]!) &&
+          isSecretPath(cwd, cluster[3]!)
+        );
+      }
+      try {
+        lstatSync(resolve(cwd, word));
+      } catch (error) {
+        // Not a path. Anything else (EACCES) means the word cannot be
+        // checked, and the caller turns the throw into a deny.
+        if (NOT_A_PATH.has((error as NodeJS.ErrnoException).code ?? "")) {
+          return false;
         }
-        try {
-          lstatSync(resolve(cwd, word));
-        } catch (error) {
-          // Not a path. Anything else (EACCES) means the word cannot be
-          // checked, and the caller turns the throw into a deny.
-          if (NOT_A_PATH.has((error as NodeJS.ErrnoException).code ?? "")) {
-            return false;
-          }
-          throw error;
-        }
-        return isSecretPath(cwd, word);
-      });
+        throw error;
+      }
+      return isSecretPath(cwd, word);
     });
+  });
 }
 
 const NAME_ONLY = new Set(["ls", "echo", "printf", "tree", "du", "stat"]);
@@ -548,7 +632,9 @@ function checkoutDiscards(command: string, cwd: string | undefined): boolean {
 
 /** Quoted spans blanked to the same length, so their text is neither a command nor a separator. */
 function maskQuotes(command: string): string {
-  return command.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, (q) => "x".repeat(q.length));
+  return command.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, (q) =>
+    "x".repeat(q.length),
+  );
 }
 
 /** A command position in quote-masked text: after a separator or opener, or a wrapper. */
@@ -587,7 +673,9 @@ function substitutionRunsAsCommand(command: string): boolean {
     .replace(/\$\([^()]*\)(?=\/)|\x60[^\x60]*\x60(?=\/)/g, "x")
     .replace(/'[^']*'/g, (q) => "x".repeat(q.length))
     .replace(/"(?:[^"\\]|\\.)*"/g, (q) =>
-      /^"(?:\$\((?!\()|\x60)/.test(q) ? `$(${"x".repeat(q.length - 2)}` : "x".repeat(q.length),
+      /^"(?:\$\((?!\()|\x60)/.test(q)
+        ? `$(${"x".repeat(q.length - 2)}`
+        : "x".repeat(q.length),
     );
   return new RegExp(String.raw`${MASKED_AT}(?:\$\((?!\()|\x60)`).test(masked);
 }
@@ -641,7 +729,8 @@ export function bashDenyReason(command: string, cwd?: string): string | null {
     // Raw text only: dequoting would turn quoted prose into commands. A
     // quoted `e''val` is caught by spelling it dequoted when raw has none.
     (evalRunsComputed(raw) ||
-    (!/(?<![\w.-])eval\b/.test(maskQuotes(raw)) && evalRunsComputed(dequote(raw))) ||
+    (!/(?<![\w.-])eval\b/.test(maskQuotes(raw)) &&
+      evalRunsComputed(dequote(raw))) ||
     substitutionRunsAsCommand(raw)
       ? "hides the command it runs"
       : undefined) ??

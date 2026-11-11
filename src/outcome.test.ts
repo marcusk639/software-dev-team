@@ -18,6 +18,7 @@ describe("runOutcome (C3, I9e)", () => {
     assert.deepEqual(runOutcome({ isError: false, ledger: [entry("ok")] }, false), {
       code: 0,
       warning: undefined,
+      needsCheck: false,
     });
   });
 
@@ -28,6 +29,7 @@ describe("runOutcome (C3, I9e)", () => {
   it("warns, but exits 0, when the ledger has calls to check and --strict is off", () => {
     const outcome = runOutcome({ isError: false, ledger: [entry("ok"), entry("started")] }, false);
     assert.equal(outcome.code, 0);
+    assert.equal(outcome.needsCheck, true);
     assert.match(outcome.warning ?? "", /1 left running in the background/);
   });
 

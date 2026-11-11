@@ -34,7 +34,12 @@ const plural = (n: number, one: string, many = `${one}s`) =>
 export function runOutcome(
   summary: RunRecord,
   strict: boolean,
-): { code: number; warning: string | undefined } {
+): {
+  code: number;
+  warning: string | undefined;
+  /** Whether the ledger or the configuration has something to check, with or without --strict. */
+  needsCheck: boolean;
+} {
   const concerns = ledgerConcerns(summary.ledger);
   const faults = summary.ledgerFaults ?? 0;
   const warnings = summary.warnings?.length ?? 0;
@@ -47,5 +52,9 @@ export function runOutcome(
   ].filter((line): line is string => typeof line === "string");
   const needsCheck = concerns.needsCheck || faults > 0 || warnings > 0;
   const code = summary.isError ? 1 : strict && needsCheck ? STRICT_EXIT : 0;
-  return { code, warning: lines.length === 0 ? undefined : lines.join("\n") };
+  return {
+    code,
+    warning: lines.length === 0 ? undefined : lines.join("\n"),
+    needsCheck,
+  };
 }

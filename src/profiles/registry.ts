@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   composeProfile,
@@ -94,3 +94,24 @@ export async function resolveProfile(
   const id = selector ?? detectProfileId(cwd);
   return composeProfile(profileChain(id, registry()));
 }
+
+/**
+ * Refuses a --cwd the profile's paths are not relative to (see
+ * ProjectProfile.root), with the flags that would work instead.
+ */
+export function checkProfileRoot(profile: ResolvedProfile, cwd: string): void {
+  if (!profile.root) return;
+  const here = resolve(cwd);
+  const root = profile.root(here);
+  if (root === null) {
+    throw new Error(
+      `--cwd ${here} is not inside the project profile "${profile.profile.id}" is for (${profile.profile.name}).`,
+    );
+  }
+  if (resolve(root) !== here) {
+    throw new Error(
+      `Profile "${profile.profile.id}" gives paths relative to the project root, ${root}, so the team must run there rather than in ${relative(root, here) || "."}. Use --cwd ${root} --profile ${profile.profile.id}.`,
+    );
+  }
+}
+

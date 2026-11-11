@@ -9,6 +9,8 @@ export interface Cli {
   verbose: boolean;
   /** Exit non-zero when the ledger records calls to check, even if the run succeeded. */
   strict: boolean;
+  /** text: a readable trace on stdout. json: the trace on stderr and one result object on stdout. */
+  output: "text" | "json";
   allow: string[];
   resume?: string | undefined;
   maxTurns?: number | undefined;
@@ -59,6 +61,13 @@ Options
   --resume <id>       continue the session printed at the end of an earlier run,
                       with the same --cwd
   --verbose           show tool results, not just tool calls
+  --output <text|json>
+                      json prints the trace to stderr and, on stdout, one
+                      JSON object: the fields \`claude -p --output-format
+                      json\` reports (subtype, is_error, result, session_id,
+                      num_turns, total_cost_usd, permission_denials) plus
+                      "team": the manager's outcome and question, the
+                      profile, the ledger and the files changed in --cwd
   --strict            exit 3 when the ledger records failed, blocked, refused,
                       background or unfinished calls, when the ledger missed
                       events, or when a project agent or allow rule was
@@ -96,6 +105,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let autoApprove = false;
   let verbose = false;
   let strict = false;
+  let output: Cli["output"] = "text";
   let maxTurns: number | undefined;
   let maxBudgetUsd: number | undefined;
   let model: string | undefined;
@@ -130,6 +140,14 @@ export function parseArgs(argv: string[]): ParsedArgs {
       case "--strict":
         strict = true;
         break;
+      case "--output": {
+        const raw = expect(argv, ++i, "--output");
+        if (raw !== "text" && raw !== "json") {
+          throw new Error(`--output expects text or json, got "${raw}"`);
+        }
+        output = raw;
+        break;
+      }
       case "--cwd":
         cwd = expect(argv, ++i, "--cwd");
         break;
@@ -202,6 +220,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     autoApprove,
     verbose,
     strict,
+    output,
     allow,
     resume,
     maxTurns,

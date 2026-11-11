@@ -24,7 +24,7 @@ After the status line, in this order:
 2. **Migration and rollback**: the migration file, whether you ran it, and how to reverse it.
 3. **Performance evidence**: the query plan or row counts behind each performance claim, or "no database reachable".
 4. **Indexes**: each index and the query that uses it, or "none".
-5. **Tests**: the commands you ran and their results, quoting the summary lines. If a command was refused or you couldn't run it, say so plainly.
+5. **Tests**: the failing run you saw before your change and the commands you ran after it, with their results, quoting the summary lines. If a command was refused or you couldn't run it, say so plainly.
 </output_format>
 
 <verification>

@@ -170,3 +170,26 @@ describe("usage: --yes names what acceptEdits approves", () => {
     assert.match(text, /rm, rmdir and sed included/);
   });
 });
+
+describe("--output", () => {
+  it("defaults to text", () => {
+    const cli = parseArgs(["do it"]);
+    assert.ok(cli.kind === "run");
+    assert.equal(cli.output, "text");
+  });
+
+  it("takes json for an outer orchestrator", () => {
+    const cli = parseArgs(["--output", "json", "--yes", "do it"]);
+    assert.ok(cli.kind === "run");
+    assert.equal(cli.output, "json");
+  });
+
+  it("rejects any other format", () => {
+    assert.throws(() => parseArgs(["--output", "yaml", "x"]), /--output expects text or json/);
+  });
+
+  it("is documented in the help", () => {
+    assert.match(usage(), /--output <text\|json>/);
+  });
+});
+

@@ -154,7 +154,7 @@ describe("I1: git global options and flag order", () => {
     bash("git -P log --oneline"),
     bash("git --no-pager diff"),
     bash("git -C sub status"),
-    bash("git push -u origin feature"),
+    bash("git fetch origin feature"),
   ]);
 });
 

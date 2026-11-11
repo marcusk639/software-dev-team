@@ -113,6 +113,18 @@ export const PROTECTED_WRITE = [
   /(^|\/)CLAUDE(\.local)?\.md$/i,
 ];
 
+/**
+ * Code that runs outside the team's run, with more access than the team has:
+ * CI workflows run with the repository's secrets once the operator pushes,
+ * and git hooks run wherever the operator commits. Changes there come from a
+ * person, so the team may read them but not write them.
+ */
+export const OUTSIDE_RUN_WRITE = [
+  /(^|\/)\.github\/workflows(\/|$)/i,
+  /(^|\/)\.(husky|githooks)(\/|$)/i,
+  /(^|\/)scripts\/git-hooks(\/|$)/i,
+];
+
 /** Protected paths for glob checks on shell words. */
 export const PROTECTED_FAMILIES: readonly Family[] = [
   {
@@ -125,6 +137,15 @@ export const PROTECTED_FAMILIES: readonly Family[] = [
     siblings: [],
   },
   { targets: [".mcp.json"], siblings: ["package.json"] },
+  {
+    targets: [
+      ".github/workflows/ci.yml",
+      ".husky/pre-commit",
+      ".githooks/pre-commit",
+      "scripts/git-hooks/pre-commit",
+    ],
+    siblings: [".github/CODEOWNERS", "scripts/build.sh"],
+  },
   {
     targets: ["CLAUDE.md", "CLAUDE.local.md"],
     siblings: ["README.md", "docs.md"],
@@ -239,6 +260,9 @@ export function writeDenyReason(cwd: string, path: string): string | null {
     return `Writing to ${path} is not permitted: it resolves outside the project directory.`;
   }
   const projectPath = relative(cwd, real);
+  if (OUTSIDE_RUN_WRITE.some((p) => p.test(path) || p.test(projectPath))) {
+    return `Writing to ${path} is not permitted: it holds code that runs outside the team's run (CI workflows, git hooks), with more access than the team has. Report the change it needs; the operator makes it.`;
+  }
   if (PROTECTED_WRITE.some((p) => p.test(path) || p.test(projectPath))) {
     return `Writing to ${path} is not permitted (secrets, git internals or agent configuration).`;
   }

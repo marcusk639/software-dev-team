@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { loadOrchestratorPrompt } from "../orchestrator/index.js";
+import { prepareAllowRules } from "../allowlist.js";
 import { loadTeam } from "../team.js";
 import { composeProfile, genericProfile, profileChain } from "./compose.js";
 import {
   BUILT_IN_PROFILES,
+  checkProfileRoot,
   detectProfileId,
   resolveProfile,
 } from "./registry.js";
@@ -328,3 +330,104 @@ describe("built-in profiles", () => {
     assert.deepEqual(genericProfile().chain, ["generic"]);
   });
 });
+
+describe("profile root", () => {
+  const root = fakeMonorepo();
+
+  it("accepts the monorepo root for recovery-platform and its product profiles", async () => {
+    for (const selector of ["recovery-platform", "regroup"]) {
+      const profile = await resolveProfile({ selector, cwd: root });
+      assert.doesNotThrow(() => checkProfileRoot(profile, root));
+    }
+  });
+
+  it("refuses a product directory, naming the root and the flags to use instead", async () => {
+    const cwd = join(root, "regroup");
+    const profile = await resolveProfile({ cwd });
+    assert.equal(profile.profile.id, "regroup");
+    assert.throws(
+      () => checkProfileRoot(profile, cwd),
+      (error: Error) =>
+        error.message.includes(`--cwd ${root} --profile regroup`) &&
+        /relative to the project root/.test(error.message),
+    );
+  });
+
+  it("refuses a directory outside the project", async () => {
+    const profile = await resolveProfile({ selector: "regroup", cwd: tmpdir() });
+    assert.throws(() => checkProfileRoot(profile, tmpdir()), /not inside/);
+  });
+
+  it("does not constrain a profile without a root", () => {
+    assert.doesNotThrow(() => checkProfileRoot(genericProfile(), tmpdir()));
+  });
+});
+
+describe("profile allow rules", () => {
+  it("accumulate parent-first across the chain", () => {
+    const profile = compose(
+      { id: "base", name: "B", summary: "s", allow: ["Bash(npm --prefix api test:*)"] },
+      { id: "child", name: "C", summary: "s", extends: "base", allow: ["Bash(npm --prefix web test:*)"] },
+    );
+    assert.deepEqual(profile.allow, ["Bash(npm --prefix api test:*)", "Bash(npm --prefix web test:*)"]);
+  });
+
+  it("are empty for the generic team", () => {
+    assert.deepEqual(genericProfile().allow, []);
+  });
+
+  it("pass the same validation as --allow for every built-in profile, with no warnings", () => {
+    const available = new Map(BUILT_IN_PROFILES.map((p) => [p.id, p]));
+    const cwd = fakeMonorepo();
+    for (const { id } of BUILT_IN_PROFILES) {
+      const profile = composeProfile(profileChain(id, available));
+      const rules = prepareAllowRules([], profile.allow, { cwd });
+      assert.deepEqual(rules.warnings, [], id);
+    }
+  });
+
+  it("give regroup's verification commands, and never a wrapper that runs any script", async () => {
+    const { allow } = await resolveProfile({ selector: "regroup", cwd: tmpdir() });
+    for (const rule of [
+      "Bash(npm --prefix regroup/functions test:*)",
+      "Bash(npm --prefix regroup/mobile run typecheck:*)",
+      "Bash(npm --prefix recovery-api test:*)",
+    ]) {
+      assert.ok(allow.includes(rule), rule);
+    }
+    for (const rule of allow) {
+      assert.doesNotMatch(rule, /emulators:exec[^)]*:\*\)$/, rule);
+      assert.doesNotMatch(rule, /^Bash\((?:npx|node|bash|sh|cd)\b/, rule);
+    }
+  });
+
+  it("are applied to a run, before the operator's --allow rules", async () => {
+    const { prepareRun } = await import("../orchestrator/index.js");
+    const cwd = fakeMonorepo();
+    const profile = await resolveProfile({ selector: "regroup", cwd });
+    const { queryOptions } = prepareRun({
+      task: "t",
+      cwd,
+      autoApprove: true,
+      profile,
+      allow: ["Bash(make check)"],
+    });
+    const tools = queryOptions.allowedTools ?? [];
+    assert.ok(tools.includes("Bash(npm --prefix regroup/functions test:*)"));
+    assert.ok(tools.indexOf("Bash(make check)") > tools.indexOf("Bash(npm --prefix regroup/functions test:*)"));
+  });
+});
+
+describe("recovery-platform's own product-manager agent", () => {
+  it("is a known shadow, so a --strict run is not flagged for it", async () => {
+    const { prepareRun } = await import("../orchestrator/index.js");
+    const cwd = fakeMonorepo();
+    mkdirSync(join(cwd, ".claude", "agents"), { recursive: true });
+    writeFileSync(join(cwd, ".claude/agents/product-manager.md"), "---\nname: product-manager\n---\n");
+    const profile = await resolveProfile({ selector: "regroup", cwd });
+    const { warnings, notices } = prepareRun({ task: "t", cwd, autoApprove: true, profile });
+    assert.ok(!warnings.some((w) => /product-manager/.test(w)), warnings.join("\n"));
+    assert.ok(notices.some((n) => /product-manager/.test(n)));
+  });
+});
+

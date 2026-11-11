@@ -183,6 +183,35 @@ describe("runTeam wiring", () => {
     assert.equal(await delegate("loose", "haiku"), undefined);
   });
 
+  it("keeps qa-tester's acceptance tests out of the engineers' reach", async () => {
+    const own = target();
+    const { queryOptions } = prepareRun({ task: "t", cwd: own, autoApprove: true });
+    const file_path = join(own, "src", "export.test.ts");
+    const post = {
+      hook_event_name: "PostToolUse",
+      session_id: "s",
+      transcript_path: "/t",
+      cwd: own,
+      tool_name: "Write",
+      tool_input: { file_path, content: "test" },
+      tool_response: {},
+      tool_use_id: "w1",
+      agent_type: "qa-tester",
+      agent_id: "qa-1",
+    } as HookInput;
+    for (const matcher of queryOptions.hooks?.PostToolUse ?? []) {
+      for (const hook of matcher.hooks) await hook(post, "w1", { signal });
+    }
+    assert.match(
+      (await preToolUse(queryOptions, "Edit", { file_path, old_string: "a", new_string: "b" }, "backend-engineer")) ?? "",
+      /acceptance test qa-tester wrote/,
+    );
+    assert.equal(
+      await preToolUse(queryOptions, "Edit", { file_path, old_string: "a", new_string: "b" }, "qa-tester"),
+      undefined,
+    );
+  });
+
   it("lets the manager delegate to a role the profile adds, with its model pinned", async () => {
     const own = target();
     writeFileSync(
@@ -314,9 +343,9 @@ describe("runTeam wiring", () => {
       task: "t",
       cwd,
       autoApprove: true,
-      allow: ["Bash(git push:*)", "Read(//tmp/*/docs/**)"],
+      allow: ["Bash(git branch:*)", "Read(//tmp/*/docs/**)"],
     });
-    assert.ok(notices.some((w) => /git push.*stay blocked/.test(w)));
+    assert.ok(notices.some((w) => /git branch.*stay blocked/.test(w)));
     assert.ok(!warnings.some((w) => /stay blocked/.test(w)));
     assert.ok(warnings.some((w) => /general-purpose.*built-in/.test(w)));
     assert.ok(warnings.some((w) => /names no single directory/.test(w)));

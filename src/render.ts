@@ -12,12 +12,17 @@ const RESET = "\x1b[0m";
  * tools ran, and what the manager concluded. Subagent internals stay collapsed
  * so the operator can follow the shape of the work without reading transcripts.
  */
-export function createRenderer(opts: { verbose: boolean }) {
+export function createRenderer(opts: {
+  verbose: boolean;
+  /** Where each line goes; stdout by default, stderr when stdout carries JSON. */
+  log?: (line: string) => void;
+}) {
+  const log = opts.log ?? ((line: string) => console.log(line));
   return function render(message: SDKMessage): void {
     switch (message.type) {
       case "system": {
         if (message.subtype === "init") {
-          console.log(
+          log(
             `${DIM}session ${message.session_id}  model ${message.model}  agents: ${message.agents?.length ?? 0}${RESET}\n`,
           );
         }
@@ -27,9 +32,9 @@ export function createRenderer(opts: { verbose: boolean }) {
       case "assistant": {
         for (const block of message.message.content) {
           if (block.type === "text" && block.text.trim()) {
-            console.log(`${block.text}\n`);
+            log(`${block.text}\n`);
           } else if (block.type === "tool_use") {
-            console.log(
+            log(
               `${CYAN}▸ ${block.name}${RESET} ${DIM}${describe(block.name, block.input)}${RESET}`,
             );
           }
@@ -49,7 +54,7 @@ export function createRenderer(opts: { verbose: boolean }) {
                 : (block.content ?? [])
                     .map((c) => ("text" in c ? c.text : ""))
                     .join("");
-            console.log(`${DIM}  ← ${truncate(text, 400)}${RESET}`);
+            log(`${DIM}  ← ${truncate(text, 400)}${RESET}`);
           }
         }
         return;
@@ -57,7 +62,7 @@ export function createRenderer(opts: { verbose: boolean }) {
 
       case "result": {
         const tint = message.is_error ? RED : BOLD;
-        console.log(
+        log(
           `\n${tint}── ${message.is_error ? "failed" : "complete"}${RESET} ${DIM}${message.num_turns} turns · ${(message.duration_ms / 1000).toFixed(1)}s${
             message.total_cost_usd === undefined
               ? ""
