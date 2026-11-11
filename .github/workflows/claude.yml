@@ -1,0 +1,135 @@
+# @claude on issues and pull requests (anthropics/claude-code-action), as in
+# recovery-platform. Mention @claude in an issue, a PR comment, a review or a
+# review comment, and Claude answers or makes the change on a branch.
+#
+# Credentials: a Claude subscription token (`claude setup-token`), held in
+# this repository's ANTHROPIC_API_KEY secret despite the name, and passed as
+# claude_code_oauth_token, as in pr-review.yml. GitHub access comes from the
+# Claude GitHub App, which the action reaches through the job's OIDC token
+# (id-token: write), so no personal access token is used.
+#
+# Every action is pinned by full commit SHA, as in pr-review.yml.
+name: Claude Code
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  claude:
+    # The repository is public: only its owner, members and collaborators can
+    # start a secret-bearing run. The action checks write access too; this
+    # keeps everyone else's comments from even starting a job.
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
+    # One run per issue or PR at a time: two mentions in quick succession would
+    # otherwise push conflicting commits to the same branch. Queued, not
+    # cancelled, so neither request is dropped.
+    concurrency:
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+      actions: read # Required for Claude to read CI results on PRs
+    steps:
+      # Code its author controls must not reach the secret-bearing steps
+      # below, because Claude runs this repo's tests (pnpm test runs the
+      # head's package.json script and test files) while it holds the GitHub
+      # App token and the Anthropic credential. Two cases:
+      # - A PR from a fork: its author chose every file, whoever commented
+      #   @claude. Skipped whatever its branch is called.
+      # - An agent-authored branch here: the Hermes/hco job branches (hco/*),
+      #   plus e2e-fix/*, kept for parity with recovery-platform.
+      # Review events carry the head in the payload; issue_comment needs a
+      # lookup; plain issues have no PR.
+      - name: Skip forks and agent-authored branches
+        id: pr-head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REVIEW_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          REVIEW_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          is_pr=false head_ref="" head_repo=""
+          if [ "$EVENT_NAME" = "issue_comment" ]; then
+            # Any lookup failure exits non-zero (bash -e), failing the step and
+            # skipping every later step: fail-closed.
+            pr_url=$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}" --jq '.pull_request.url // empty')
+            if [ -n "$pr_url" ]; then
+              is_pr=true
+              head=$(gh api "repos/${REPO}/pulls/${ISSUE_NUMBER}" --jq '[.head.ref, (.head.repo.full_name // "")] | @tsv')
+              IFS=$'\t' read -r head_ref head_repo <<< "$head"
+            fi
+          elif [ "$EVENT_NAME" = "pull_request_review" ] || [ "$EVENT_NAME" = "pull_request_review_comment" ]; then
+            is_pr=true head_ref="$REVIEW_HEAD_REF" head_repo="$REVIEW_HEAD_REPO"
+          fi
+          skip=false
+          # A deleted fork has no head repository: empty, so skipped too.
+          if [ "$is_pr" = true ] && [ "$head_repo" != "$REPO" ]; then
+            skip=true; echo "PR head is in ${head_repo:-a deleted repository}, not $REPO: skipped"
+          fi
+          case "$head_ref" in
+            hco/*|e2e-fix/*) skip=true; echo "Agent-authored branch $head_ref: skipped" ;;
+          esac
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repository
+        if: steps.pr-head.outputs.skip != 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # So Claude can run this repo's checks (pnpm test, pnpm typecheck) on
+      # what it changes. --ignore-scripts: no dependency's install script runs
+      # in a job that can mint the OIDC token. On a PR comment this installs
+      # the default branch's dependencies (the action switches to the PR head
+      # afterwards), so a PR that changes them is checked against main's.
+      - name: Set up Node
+        if: steps.pr-head.outputs.skip != 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        if: steps.pr-head.outputs.skip != 'true'
+        run: |
+          npm install -g pnpm@12.6.0
+          pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Run Claude Code
+        if: steps.pr-head.outputs.skip != 'true'
+        id: claude
+        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
+        with:
+          # A subscription token, stored under ANTHROPIC_API_KEY (see above).
+          claude_code_oauth_token: ${{ secrets.ANTHROPIC_API_KEY }}
+
+          # Lets Claude read CI results on PRs.
+          additional_permissions: |
+            actions: read
+
+          # This repo's checks, so a change Claude makes is verified the way a
+          # contributor's is (see package.json).
+          claude_args: >-
+            --allowedTools "Bash(pnpm test:*),Bash(pnpm typecheck),Bash(node --import tsx --test:*)"
