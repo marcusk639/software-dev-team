@@ -44,7 +44,9 @@ The recovery-platform profile pre-approves `Bash(git diff:*)`. `git diff --no-in
 
 **Fix:** `gitReadsOutside` in `src/permissions/shell.ts` refuses `git diff` and `git grep` with `--no-index` or any abbreviation git accepts (`--no-in`…), `git diff` with a path operand outside the project, and either one run from outside it through `-C`, `--git-dir`, `--work-tree`, or env's chdir option in any spelling (`-C/`, `-iC/`, `--chd=`).
 
-A directory change elsewhere in the command is judged conservatively, because the hook can't know where git really runs: a `cd` may fail, run in a subshell, or sit on the other side of `||`. So an operand must stay inside the project from the original directory and from every directory a `cd`, `pushd` or `popd` in the command could reach, including one after `builtin`, `command`, `if`/`then`/`do` or inside `$(…)`. A `cd` to anywhere unknown (outside, `-`, a bare `cd`, `popd`, a variable, any `CDPATH`) counts as outside.
+A directory change anywhere in the command makes `git diff` and `git grep` count as reading outside, because the hook can't know where git then runs: a `cd` may fail, run in a subshell, sit behind `||`, or hide in an alias, `coproc` or `bash -c`. That covers `cd`, `pushd`, `popd` and `chdir` as words, `CDPATH`, and `GIT_DIR` / `GIT_WORK_TREE` assignments. Earlier rounds tried to follow where each `cd` lands, and the reviewer found a new spelling each time. The cost is small: `cd src && git diff a.ts` and `git grep cd` are refused too, and the refusal says to run git diff on its own, from the project root.
+
+**Residual:** other launchers that change directory (`sudo -D`, `nsenter --wd`, `chroot`) aren't parsed. In the image, `sudo` isn't installed, and `chroot` and `nsenter` need privileges the container doesn't have: it runs as a non-root user with `--cap-drop ALL` and `no-new-privileges`. An unattended run doesn't pre-approve any of them either.
 
 The abbreviation, directory-change and spelling cases came from the PR reviewer's private advisories on #13. Tests: `src/permissions-release.test.ts`, "security review" suites.
 
@@ -69,7 +71,7 @@ The hook checks redirect targets only against protected paths (`git log > .husky
 **Mitigation:**
 
 - The container is the boundary: no credentials but the model key (S9), no network beyond the API.
-- npm can't be pointed at other code: the hook refuses `--script-shell`, `--userconfig`, `--globalconfig`, a second `--prefix` or `-C`, `--node-options` (which sets `NODE_OPTIONS` for the scripts, so `--require=<file>` loads any code), any abbreviation npm accepts (`--scr`, `--nod`, `--userc`, `--prefi`), and the matching `npm_config_*` variables (`NPM_CONFIG_OVERRIDES` in `src/permissions/shell.ts`). `.npmrc` is a secret path, so the team can't write it either.
+- npm can't be pointed at other code: the hook refuses `--script-shell`, `--userconfig`, `--globalconfig`, a second `--prefix` or `-C`, `--node-options` (which sets `NODE_OPTIONS` for the scripts, so `--require=<file>` loads any code) and a `NODE_OPTIONS` assignment that loads a module (`--require`, `-r`, `--import`, `--loader`; `--max-old-space-size` and the like stay allowed), any abbreviation npm accepts (`--scr`, `--nod`, `--userc`, `--prefi`), and the matching `npm_config_*` variables (`NPM_CONFIG_OVERRIDES` in `src/permissions/shell.ts`). `.npmrc` is a secret path, so the team can't write it either.
 - A person reviews `changed_files` before merging, so a change to `package.json` scripts or a test config is visible.
 
 ### S5. `--allow` accepts rules that approve almost anything (open, accepted for now)

@@ -291,7 +291,7 @@ describe("security review round 2: abbreviations and directory changes", () => {
       assert.match(denyReason(policy, "Bash", { command }) ?? "", /outside the project/);
     });
   }
-  allows(["cd src && git diff a.ts", "cd src && git grep -n token", "git diff --no-indent-heuristic"]);
+  allows(["git diff --no-indent-heuristic", "git grep -n token src"]);
 });
 
 describe("security review: pre-approved npm commands keep npm's own settings", () => {
@@ -330,9 +330,9 @@ describe("security review: pre-approved npm commands keep npm's own settings", (
 });
 
 describe("security review round 3: a cd may fail, not persist, or be spelled another way", () => {
-  // The hook can't know where git really runs after a cd, so an operand must
-  // be inside the project from the original directory and from every
-  // directory a cd could reach, and a cd to somewhere unknown counts as outside.
+  // The hook can't know where git really runs after a cd (it may fail, run
+  // in a subshell, or sit behind ||), so a directory change anywhere in the
+  // command makes git diff and git grep count as reading outside.
   for (const command of [
     "(cd src/a/b); git diff ../../../etc/passwd ../../../dev/null",
     "cd missing/a/b; git diff ../../../etc/passwd x",
@@ -354,7 +354,7 @@ describe("security review round 3: a cd may fail, not persist, or be spelled ano
       assert.match(denyReason(policy, "Bash", { command }) ?? "", /outside the project/);
     });
   }
-  allows(["cd src && git diff a.ts", "git grep cd", "git diff -- src/cd.ts", "git log --grep cd"]);
+  allows(["git diff -- src/cd.ts", "git grep -n cdn src", "git log --grep cd"]);
 });
 
 describe("security review round 3: npm node-options", () => {
@@ -369,4 +369,38 @@ describe("security review round 3: npm node-options", () => {
     });
   }
   allows(["npm --prefix recovery-api test --no-coverage"]);
+});
+
+describe("security review round 4: any directory change, wherever it appears", () => {
+  // Spotting every shell form of a cd at command position is a losing game,
+  // so git diff and git grep are refused in any command that changes
+  // directory anywhere, or points git at another work tree.
+  for (const command of [
+    "cd src && git diff a.ts",
+    "coproc cd /; git diff etc/passwd dev/null",
+    "alias go=cd; go /; git diff etc/passwd dev/null",
+    "chdir / && git diff etc/passwd dev/null",
+    "bash -c 'cd / && git diff etc/passwd dev/null'",
+    "GIT_WORK_TREE=/ git diff etc/passwd dev/null",
+    "export GIT_WORK_TREE=/; git diff etc/passwd dev/null",
+    "git grep cd",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /outside the project/);
+    });
+  }
+});
+
+describe("security review round 4: NODE_OPTIONS that load code", () => {
+  for (const command of [
+    "NODE_OPTIONS=--require=/tmp/x.js npm --prefix recovery-api test",
+    "NODE_OPTIONS='--max-old-space-size=4096 -r /tmp/x.js' npm --prefix recovery-api test",
+    "export NODE_OPTIONS=--import=/tmp/x.mjs; npm --prefix recovery-api test",
+    "env NODE_OPTIONS=--loader=/tmp/x.mjs npm --prefix recovery-api test",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /npm's shell, config or package directory|loads code/);
+    });
+  }
+  allows(["NODE_OPTIONS=--max-old-space-size=4096 npm --prefix recovery-api test"]);
 });

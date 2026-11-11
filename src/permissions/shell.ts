@@ -112,7 +112,8 @@ const GIT_READ_WRITES = new RegExp(
  * --require=…` loads any file), another config file, or a second
  * `--prefix` that moves the run to another package. Set by option, in any
  * abbreviation npm accepts (`--scr`, `--nod`, `--userc`, `--prefi`) or as `-C`, or by
- * an `npm_config_*` variable (npm reads either case). `.npmrc` is already a
+ * an `npm_config_*` variable (npm reads either case), or NODE_OPTIONS
+ * itself when it loads a module (`--require`, `-r`, `--import`, `--loader`). `.npmrc` is already a
  * secret path, so it cannot be written to the same end.
  */
 const NPM_CONFIG_OVERRIDES = [
@@ -123,6 +124,9 @@ const NPM_CONFIG_OVERRIDES = [
     String.raw`${AT}${ASSIGNMENTS}${ENV}(?:\S*\/)?\\?npm\b[^|;&\n]*\s--prefix[\s=][^|;&\n]*\s(?:--prefi[\w-]*|-C)(?=[\s=]|$)`,
   ),
   /(?:^|[\s;&|(])npm_config_(?:script_shell|userconfig|globalconfig|prefix|node_options)=/i,
+  // Node's own variable for the same setting, when it loads code. Other
+  // NODE_OPTIONS (--max-old-space-size for a big Jest run) stay allowed.
+  /(?:^|[^\w])NODE_OPTIONS=[^|;&\n]*?(?:--require|--import|--(?:experimental-)?loader|(?<=[\s=])-r)(?=[\s=]|$)/,
 ];
 
 const RELEASE_WHY =
@@ -723,28 +727,25 @@ const isNoIndex = (word: string): boolean =>
   word.length >= "--no-in".length && "--no-index".startsWith(word);
 
 /**
- * A directory change at command position: `cd`, `pushd` or `popd` after the
- * start, a separator, a substitution or a shell keyword, with any prefix
- * assignments. Group 1 is the command, group 2 the rest of its words.
+ * A directory change anywhere in a command: `cd`, `pushd`, `popd` or zsh's
+ * `chdir` as a word (not inside a path like `src/cd.ts`), a CDPATH
+ * assignment, or GIT_DIR / GIT_WORK_TREE pointing git somewhere else.
+ * Spotting every shell form of a cd at command position (after `coproc`, in
+ * an alias, inside `bash -c`) is a losing game, so any of these counts.
  */
 const DIRECTORY_CHANGE =
-  /(?:^|[;&|(){`\n]|(?:^|\s)(?:if|then|do|else|elif|while|until|builtin|command|exec|time|!)(?=\s))\s*(?:\w+=\S*\s+)*(cd|pushd|popd)(?=$|[\s;&|()`])([^;&|()`\n]*)/g;
+  /(?:^|[^\w./-])(?:cd|pushd|popd|chdir)(?=$|[^\w./-])|(?:^|[^\w])(?:CDPATH|GIT_DIR|GIT_WORK_TREE)=/;
 
 /**
- * True when `git diff` or `git grep` would read files outside the project:
+ * True when `git diff` or `git grep` could read files outside the project:
  * either one with --no-index (or an abbreviation of it), which compares or
  * searches any file; git diff with a path outside the work tree, which
- * switches to --no-index unasked; or either one run from outside the
- * project, through git's -C, --git-dir or --work-tree, env's chdir option,
- * or a directory change elsewhere in the command. An allow rule for
- * `git diff` would otherwise approve a read the file tools refuse.
- *
- * The hook can't know where git really runs after a cd: it may fail, run in
- * a subshell, or sit on the other side of `||`. So an operand must be inside
- * the project from the original directory and from every directory a cd in
- * the command could reach, and a cd anywhere unknown (outside, `-`, a bare
- * `cd`, `popd`, a variable, any CDPATH) counts as outside. A path the text
- * cannot judge (`~`, a variable) counts as outside.
+ * switches to --no-index unasked; either one run from outside the project
+ * through git's -C, --git-dir or --work-tree or env's chdir option; or
+ * either one in a command that changes directory anywhere (DIRECTORY_CHANGE),
+ * since the hook can't know where git then runs. An allow rule for
+ * `git diff` would otherwise approve a read the file tools refuse. A path
+ * the text cannot judge (`~`, a variable) counts as outside.
  */
 function gitReadsOutside(command: string, cwd: string | undefined): boolean {
   let real: string | undefined;
@@ -768,90 +769,53 @@ function gitReadsOutside(command: string, cwd: string | undefined): boolean {
     const path = resolve(base, word);
     return !roots.some((root) => path === root || path.startsWith(root + sep));
   };
-  const words = (text: string) =>
-    text
+  const moved = DIRECTORY_CHANGE.test(command);
+
+  return command.split(/&&|\|\||[|;&\n]/).some((segment) => {
+    const words = segment
       .trim()
+      .replace(/^[({\s]+/, "")
       .split(/\s+/)
       .map((word) => dequote(word).replace(/[)`]+$/, ""))
       .filter(Boolean);
-
-  // Every directory git might run in: where the command starts, and each
-  // place a cd in it could leave, alone or after the ones before it.
-  const root = cwd === undefined ? undefined : resolve(cwd);
-  const bases: (string | undefined)[] = [root];
-  let anywhere = /(?:^|[\s;&|(){`])CDPATH=/.test(command);
-  let after = root;
-  for (const [, name, rest] of command.matchAll(DIRECTORY_CHANGE)) {
-    const target = words(rest ?? "").find(
-      (word) => !word.startsWith("-") || word === "-",
-    );
-    if (
-      name === "popd" ||
-      target === undefined ||
-      target === "-" ||
-      bases.some((base) => outside(base, target))
-    ) {
-      anywhere = true;
-      continue;
-    }
-    if (root !== undefined) {
-      bases.push(resolve(root, target), resolve(after!, target));
-      after = resolve(after!, target);
-    }
-  }
-
-  return command.split(/&&|\|\||[|;&\n]/).some((segment) => {
-    const segmentWords = words(segment.replace(/^[({\s]+/, ""));
-    let i = segmentWords.findIndex((word) => /^(?:\S*\/)?git$/.test(word));
+    let i = words.findIndex((word) => /^(?:\S*\/)?git$/.test(word));
     if (i < 0) return false;
-    let here = [...new Set(bases)];
-    let gone = anywhere;
+    let here = cwd === undefined ? undefined : resolve(cwd);
+    let gone = moved;
     // env's chdir option, in any spelling: -C dir, -Cdir, a cluster ending
     // in C (-iC/), or a prefix of --chdir. Where it goes is not judged.
-    const before = segmentWords.slice(0, i);
+    const before = words.slice(0, i);
     if (
       before.some((word) => /^(?:\S*\/)?env$/.test(word)) &&
       before.some((word) => /^-[A-Za-z]*C/.test(word) || /^--chd/.test(word))
     ) {
       gone = true;
     }
-    const at = (value: string) => {
-      if (here.some((base) => outside(base, value))) gone = true;
-    };
-    for (
-      i += 1;
-      i < segmentWords.length && segmentWords[i]!.startsWith("-");
-      i += 1
-    ) {
-      const [option, attached] = segmentWords[i]!.split(/=(.*)/s, 2) as [
+    for (i += 1; i < words.length && words[i]!.startsWith("-"); i += 1) {
+      const [option, attached] = words[i]!.split(/=(.*)/s, 2) as [
         string,
         string | undefined,
       ];
       const value =
-        attached ??
-        (GIT_VALUE_OPTIONS.has(option) ? segmentWords[++i] : undefined);
+        attached ?? (GIT_VALUE_OPTIONS.has(option) ? words[++i] : undefined);
       if (value === undefined) continue;
       if (option === "-C") {
-        at(value);
-        here = here.map((base) =>
-          base === undefined ? undefined : resolve(base, value),
-        );
+        if (outside(here, value)) gone = true;
+        if (here !== undefined) here = resolve(here, value);
       } else if (option === "--git-dir" || option === "--work-tree") {
-        at(value);
+        if (outside(here, value)) gone = true;
       }
     }
-    const sub = segmentWords[i];
+    const sub = words[i];
     if (sub !== "diff" && sub !== "grep") return false;
-    const args = segmentWords.slice(i + 1);
+    const args = words.slice(i + 1);
     if (gone || args.some(isNoIndex)) return true;
     if (sub === "grep") return false;
     const dash = args.indexOf("--");
     const operands = args.filter(
       (arg, k) => (dash >= 0 && k > dash) || (!arg.startsWith("-") && k !== dash),
     );
-    return operands.some((operand) =>
-      here.some((base) => outside(base, operand)),
-    );
+    return operands.some((operand) => outside(here, operand));
   });
 }
 
@@ -913,7 +877,7 @@ export function bashDenyReason(command: string, cwd?: string): string | null {
       ? "git checkout with a path discards uncommitted changes"
       : undefined) ??
     (forms.some((form) => gitReadsOutside(form, cwd))
-      ? "git diff or git grep reading files outside the project"
+      ? "git diff or git grep reading files outside the project, or after a directory change: run it on its own, from the project root"
       : undefined) ??
     forms.map(gitGlobalOptionReason).find(Boolean) ??
     (forms.some(gitConfigWrites) || forms.some(gitCloneConfigRuns)
