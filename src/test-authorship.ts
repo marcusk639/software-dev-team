@@ -29,12 +29,13 @@ const TEST_PATH = new RegExp(
   "i",
 );
 /**
- * Case-sensitive, so `Contest.cs` and `latest/` are not tests, and only in
- * the languages that name tests this way, so a TypeScript `ABTest.ts` model
- * is not one either.
+ * Case-sensitive, so `Contest.cs` and `latest/` are not tests. A directory
+ * counts only as a `*Tests/` project or Android's `androidTest/`, and a file
+ * only in the languages that name tests this way, so an `ABTest/` or
+ * `LoadTest/` directory and a TypeScript `ABTest.ts` model are not tests.
  */
 const CAMEL_TEST_PATH = new RegExp(
-  String.raw`(^|/)[^/]*Tests?/|[A-Za-z0-9]Tests?\.(cs|swift|java|kts?|php)$`,
+  String.raw`(^|/)([^/]*Tests|androidTest)/|[A-Za-z0-9]Tests?\.(cs|swift|java|kts?|php)$`,
 );
 
 export function isTestPath(path: string): boolean {

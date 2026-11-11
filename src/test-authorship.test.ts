@@ -284,7 +284,7 @@ describe("review round 4: .NET and Xcode test layouts", () => {
       "app/src/androidTest/java/ExportTest.kt",
       "Tests/AppTests/ExportTests.swift",
     ];
-    const notTests = ["src/latest/index.ts", "src/contests/Latest.java", "src/Contest.cs", "src/models/ABTest.ts"];
+    const notTests = ["src/latest/index.ts", "src/contests/Latest.java", "src/Contest.cs", "src/models/ABTest.ts", "src/ABTest/model.ts", "src/LoadTest/config.ts"];
     for (const file_path of [...tests, ...notTests]) {
       await fire(authorship, "PostToolUse", "qa-tester", "Write", { file_path });
     }
