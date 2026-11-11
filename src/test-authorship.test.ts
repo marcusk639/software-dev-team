@@ -272,3 +272,22 @@ describe("review round 3: tests named by other runners' conventions are tests to
     }
   });
 });
+
+describe("review round 4: .NET and Xcode test layouts", () => {
+  it("locks CamelCase test projects and files, and leaves look-alikes alone", async () => {
+    const cwd = project();
+    const authorship = createTestAuthorship({ cwd });
+    const tests = [
+      "MyApp.Tests/UserTests.cs",
+      "MyAppTests/LoginTests.swift",
+      "Sources/App/LoginTest.swift",
+      "app/src/androidTest/java/ExportTest.kt",
+      "Tests/AppTests/ExportTests.swift",
+    ];
+    const notTests = ["src/latest/index.ts", "src/contests/Latest.java", "src/Contest.cs", "src/models/ABTest.ts"];
+    for (const file_path of [...tests, ...notTests]) {
+      await fire(authorship, "PostToolUse", "qa-tester", "Write", { file_path });
+    }
+    assert.deepEqual(authorship.files(), [...tests].sort());
+  });
+});

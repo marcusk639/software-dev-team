@@ -10,14 +10,16 @@ export const TEST_AUTHOR = "qa-tester";
 /**
  * A test file, by the layouts test runners use: anything under `__tests__/`,
  * `test/`, `tests/`, `e2e/` or `maestro/`; `*.test.*`, `*.spec.*`, `*.e2e.*`
- * and Cypress's `*.cy.*` source files; and Python's `test_*.py`, and the
- * `*_test.*` / `*_spec.*` names Go, Python and RSpec use. This covers the
+ * and Cypress's `*.cy.*` source files; Python's `test_*.py`, and the
+ * `*_test.*` / `*_spec.*` names Go, Python and RSpec use; and the CamelCase
+ * `*Test.*` / `*Tests.*` files and `*Tests/` projects of .NET, Xcode, Java
+ * and Kotlin (`MyApp.Tests/UserTests.cs`, `androidTest/`). This covers the
  * test paths recovery-platform's own implementer gate protects. Only these
  * are locked: a source stub qa-tester adds so a test can load is the
  * engineer's to implement, and a snapshot or a document is not a test.
  */
 const CODE = "(?:[cm]?[jt]sx?|py|rb|go|java|kts?|swift|dart|php|cs|rs|exs?)";
-export const TEST_PATH = new RegExp(
+const TEST_PATH = new RegExp(
   [
     String.raw`(^|/)(__tests__|e2e|\.?maestro|tests?)/`,
     String.raw`\.(test|spec|e2e|cy)\.${CODE}$`,
@@ -26,6 +28,18 @@ export const TEST_PATH = new RegExp(
   ].join("|"),
   "i",
 );
+/**
+ * Case-sensitive, so `Contest.cs` and `latest/` are not tests, and only in
+ * the languages that name tests this way, so a TypeScript `ABTest.ts` model
+ * is not one either.
+ */
+const CAMEL_TEST_PATH = new RegExp(
+  String.raw`(^|/)[^/]*Tests?/|[A-Za-z0-9]Tests?\.(cs|swift|java|kts?|php)$`,
+);
+
+export function isTestPath(path: string): boolean {
+  return TEST_PATH.test(path) || CAMEL_TEST_PATH.test(path);
+}
 
 /**
  * The path a file would have once every symlink is resolved, so `a/../x`,
@@ -61,7 +75,7 @@ const deny = (reason: string) => ({
 
 /**
  * Keeps the tests qa-tester writes in a run as the acceptance contract: once
- * qa-tester has written a test file (TEST_PATH) with a file tool, any other
+ * qa-tester has written a test file (isTestPath) with a file tool, any other
  * role's file-tool write to it is denied, so an engineer cannot reach green by editing the
  * test instead of the code. A write counts once it succeeded (PostToolUse).
  * A file is matched by its identity (device and inode), so a hard link, a
@@ -133,7 +147,7 @@ export function createTestAuthorship(options: {
                 input.agent_type === TEST_AUTHOR
               ) {
                 const path = pathOf(input.tool_input);
-                if (path !== undefined && TEST_PATH.test(relative(root, path))) {
+                if (path !== undefined && isTestPath(relative(root, path))) {
                   owned.add(path);
                   const id = identity(path);
                   if (id !== undefined) ownedIds.add(id);
