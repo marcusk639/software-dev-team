@@ -98,6 +98,24 @@ export default {
 pnpm start --profile ../acme/team-profile.ts --cwd ../acme "…"
 ```
 
+## GitHub automation
+
+Three Claude workflows run on this repository, the first two as in recovery-platform:
+
+| Workflow | Trigger | What it does |
+| --- | --- | --- |
+| `.github/workflows/claude.yml` | `@claude` in an issue, PR comment, review or review comment, by the owner, a member or a collaborator | Claude answers, or makes the change on a branch, and can run `pnpm test` and `pnpm typecheck`. PRs from forks and agent-authored branches (`hco/*`, `e2e-fix/*`) are skipped, since their author controls the tests Claude would run. |
+| `.github/workflows/pr-review.yml` | Every non-draft PR into `main` | The advisory, repo-aware reviewer ([pr-review-kit](https://github.com/marcusk639/pr-review-kit)). It comments only and is never a required check. See [docs/plans/pr-reviewer-runbook.md](docs/plans/pr-reviewer-runbook.md). |
+| `.github/workflows/pr-review-learn.yml` | Weekly, and on demand | The reviewer's learning job: proposes memory changes from feedback on its comments, as one PR. |
+
+Secrets:
+
+- `ANTHROPIC_API_KEY` holds a Claude subscription token, from `claude setup-token`, despite its name. All three workflows pass it to Claude Code as `claude_code_oauth_token`. To replace it, run `gh secret set ANTHROPIC_API_KEY -R marcusk639/software-dev-team` and paste a new token. A real API key in this secret would not work, because it is passed as a subscription token.
+- `PR_REVIEW_ID_KEY` and `SECURITY_ADVISORY_TOKEN` are optional. They only enable the reviewer's draft security advisories.
+- GitHub access comes from the Claude GitHub App, which must stay installed on the repository. None of these workflows uses a personal access token: a `GH_TOKEN` secret, if one is set, is not read by any of them.
+
+An `@claude` on an issue or a PR comment runs the default branch's copy of `claude.yml`. On a review it runs the PR's copy, but the action's token exchange only accepts workflows already on the default branch. Either way, a change to `claude.yml` takes effect once it is merged.
+
 ## Development
 
 ```bash
