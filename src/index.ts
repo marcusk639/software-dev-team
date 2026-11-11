@@ -1,142 +1,48 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { DEFAULT_ALLOWED_TOOLS, prepareAllowRules } from "./allowlist.js";
+import { checkProjectDir, type ParsedArgs, parseArgs, usage } from "./cli.js";
+import { runOutcome } from "./outcome.js";
 import { createRenderer } from "./render.js";
-import { runTeam } from "./orchestrator.js";
-import type { ResolvedTeam } from "./profiles/compose.js";
-import { BUILT_IN_PROFILES, resolveTeam } from "./profiles/registry.js";
+import {
+  loadOrchestratorPrompt,
+  ORCHESTRATOR,
+  promptNames,
+  runTeam,
+} from "./orchestrator/index.js";
+import type { ResolvedProfile } from "./profiles/compose.js";
+import { BUILT_IN_PROFILES, resolveProfile } from "./profiles/registry.js";
+import { loadProjectAgents } from "./project-agents.js";
+import { CUSTOMIZATION_DIR, loadCustomizations } from "./prompts.js";
+import { loadTeam, TEAM_CONVENTIONS } from "./team.js";
 
-interface Cli {
-  task: string;
-  cwd: string;
-  profile?: string | undefined;
-  autoApprove: boolean;
-  verbose: boolean;
-  maxTurns?: number | undefined;
-  model?: string | undefined;
-}
+const DIM = "\x1b[2m";
+const RESET = "\x1b[0m";
 
-function usage(): string {
-  return `software-dev-team — an autonomous software development team
-
-  pnpm start "<task>"                  delegate a task to the team
-  pnpm start --file ./task.md          read the task from a file
-  pnpm start --roles                   list the resolved specialists and exit
-  pnpm start --profiles                list the built-in project profiles and exit
-
-Options
-  --cwd <path>        project the team works in (default: current directory)
-  --profile <id|path> project profile: a built-in id, or a path to a profile
-                      module (default: detected from --cwd, else "generic")
-  --yes               auto-approve tool use (destructive commands stay blocked)
-  --verbose           show tool results, not just tool calls
-  --max-turns <n>     cap agentic turns
-  --model <name>      override the orchestrator model (e.g. opus, sonnet)
-
-The team reads and writes real files in --cwd. Point it at a project directory,
-not at this one, unless you mean for it to edit itself.`;
-}
-
-type Listing = {
-  list: "roles" | "profiles";
-  cwd: string;
-  profile?: string | undefined;
-};
-
-function parseArgs(argv: string[]): Cli | Listing | { help: true } {
-  const positional: string[] = [];
-  let cwd = process.cwd();
-  let profile: string | undefined;
-  let list: Listing["list"] | undefined;
-  let autoApprove = false;
-  let verbose = false;
-  let maxTurns: number | undefined;
-  let model: string | undefined;
-  let file: string | undefined;
-
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i]!;
-    switch (arg) {
-      case "-h":
-      case "--help":
-        return { help: true };
-      case "--roles":
-        list = "roles";
-        break;
-      case "--profiles":
-        list = "profiles";
-        break;
-      case "--profile":
-        profile = expect(argv, ++i, "--profile");
-        break;
-      case "--yes":
-      case "-y":
-        autoApprove = true;
-        break;
-      case "--verbose":
-        verbose = true;
-        break;
-      case "--cwd":
-        cwd = expect(argv, ++i, "--cwd");
-        break;
-      case "--file":
-        file = expect(argv, ++i, "--file");
-        break;
-      case "--model":
-        model = expect(argv, ++i, "--model");
-        break;
-      case "--max-turns": {
-        const raw = expect(argv, ++i, "--max-turns");
-        maxTurns = Number.parseInt(raw, 10);
-        if (!Number.isFinite(maxTurns) || maxTurns <= 0) {
-          throw new Error(
-            `--max-turns expects a positive integer, got "${raw}"`,
-          );
-        }
-        break;
-      }
-      default:
-        if (arg.startsWith("-")) throw new Error(`Unknown option: ${arg}`);
-        positional.push(arg);
-    }
-  }
-
-  if (list) return { list, cwd, profile };
-
-  const task = file
-    ? readFileSync(file, "utf8").trim()
-    : positional.join(" ").trim();
-  if (!task) return { help: true };
-
-  return { task, cwd, profile, autoApprove, verbose, maxTurns, model };
-}
-
-function expect(argv: string[], index: number, flag: string): string {
-  const value = argv[index];
-  if (value === undefined || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
-}
-
-function describeProfile(team: ResolvedTeam): string {
-  return `profile ${team.chain.join(" → ")}  (${team.profile.name})`;
+function describeProfile(profile: ResolvedProfile): string {
+  return `profile ${profile.chain.join(" → ")}  (${profile.profile.name})`;
 }
 
 async function main(): Promise<number> {
-  let cli: Cli | Listing | { help: true };
+  let cli: ParsedArgs;
   try {
     cli = parseArgs(process.argv.slice(2));
+    if (cli.kind === "run" || cli.kind === "roles") checkProjectDir(cli.cwd);
+    // Validated now so a bad --allow rule is a usage error, not a failure
+    // mid-run. Its warnings are printed by runTeam, with the run's others.
+    if (cli.kind === "run") {
+      prepareAllowRules(DEFAULT_ALLOWED_TOOLS, cli.allow, { cwd: cli.cwd });
+    }
   } catch (error) {
     console.error(`${(error as Error).message}\n\n${usage()}`);
     return 2;
   }
 
-  if ("help" in cli) {
+  if (cli.kind === "help") {
     console.log(usage());
     return 0;
   }
 
-  if ("list" in cli && cli.list === "profiles") {
+  if (cli.kind === "profiles") {
     for (const profile of BUILT_IN_PROFILES) {
       const parent = profile.extends ? `  extends ${profile.extends}` : "";
       console.log(`${profile.id}${parent}\n  ${profile.summary}\n`);
@@ -144,21 +50,49 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  let team: ResolvedTeam;
+  let profile: ResolvedProfile;
   try {
-    team = await resolveTeam({ selector: cli.profile, cwd: cli.cwd });
+    profile = await resolveProfile({ selector: cli.profile, cwd: cli.cwd });
   } catch (error) {
     console.error((error as Error).message);
     return 2;
   }
 
-  if ("list" in cli) {
-    console.log(`${describeProfile(team)}\n`);
-    for (const [role, agent] of Object.entries(team.agents)) {
+  if (cli.kind === "roles") {
+    // Loading every prompt here makes --roles a cheap check that none is
+    // missing and that the profile and the project's customizations are valid.
+    const customizations = loadCustomizations(cli.cwd, promptNames(profile));
+    const team = loadTeam(customizations, profile);
+    loadOrchestratorPrompt(customizations, profile);
+    const status = (name: string) => {
+      const custom = customizations.get(name);
+      if (!custom) return "";
+      const kinds = [
+        custom.replace && "replaced",
+        custom.sections &&
+          `sections: ${Object.keys(custom.sections).join(", ")}`,
+        custom.append && "extended",
+      ].filter(Boolean);
+      return `  ${DIM}(${kinds.join("; ")} by ${CUSTOMIZATION_DIR})${RESET}`;
+    };
+    console.log(`${describeProfile(profile)}\n`);
+    console.log(`${ORCHESTRATOR}${status(ORCHESTRATOR)}\n`);
+    console.log(
+      `${TEAM_CONVENTIONS}${status(TEAM_CONVENTIONS)}\n  Conventions shared by every specialist.\n`,
+    );
+    for (const [role, agent] of Object.entries(team)) {
       console.log(
-        `${role}  [${agent.model ?? "default"}]\n  ${agent.description}\n`,
+        `${role}  [${agent.model ?? "default"}]${status(role)}\n  ${agent.description}\n`,
       );
     }
+    // The same checks a run applies, so a rejected agent shows up here first.
+    const project = loadProjectAgents(cli.cwd, Object.keys(team));
+    for (const agent of project.agents) {
+      console.log(
+        `${agent.name}  [${agent.model ?? "default"}]  ${DIM}(project agent from .claude/agents)${RESET}\n`,
+      );
+    }
+    for (const warning of project.warnings) console.error(warning);
     return 0;
   }
 
@@ -166,44 +100,79 @@ async function main(): Promise<number> {
     // Not a hard gate: the SDK also authenticates from the credentials stored by
     // `claude login`, where neither variable is set.
     console.error(
-      "\x1b[2mNo ANTHROPIC_API_KEY set; using stored Claude Code credentials.\x1b[0m",
+      `${DIM}No ANTHROPIC_API_KEY set; using stored Claude Code credentials.${RESET}`,
     );
   }
 
   // Interactive mode blocks on a readline prompt, which never resolves without
   // a TTY; fail fast instead of hanging in CI or a pipe.
   if (!cli.autoApprove && !process.stdin.isTTY) {
-    console.error("No TTY available for approval prompts. Re-run with --yes to auto-approve.");
+    console.error(
+      "No TTY available for approval prompts. Re-run with --yes to auto-approve.",
+    );
     return 2;
   }
 
-  console.error(`\x1b[2m${describeProfile(team)}\x1b[0m`);
+  console.error(`${DIM}${describeProfile(profile)}${RESET}`);
 
   const summary = await runTeam({
     task: cli.task,
-    team,
     cwd: cli.cwd,
+    profile,
     autoApprove: cli.autoApprove,
+    allow: cli.allow,
+    resume: cli.resume,
     maxTurns: cli.maxTurns,
+    maxBudgetUsd: cli.maxBudgetUsd,
     model: cli.model,
     onMessage: createRenderer({ verbose: cli.verbose }),
+    onWarning: (warning) => console.error(`${DIM}${warning}${RESET}`),
   });
 
-  if (summary.isError) {
-    console.error(`\n${summary.result}`);
-    return 1;
+  if (summary.ledgerText) {
+    console.log(`\n${DIM}What actually ran in this run:\n${summary.ledgerText}${RESET}`);
+  }
+  // Repeated here, next to the ledger, so they are not lost in the scrollback.
+  if (summary.warnings.length > 0) {
+    console.error(
+      `\nConfiguration warnings for this run:\n${summary.warnings.map((w) => `- ${w}`).join("\n")}`,
+    );
   }
 
+  const outcome = runOutcome(summary, cli.strict);
+  if (outcome.warning) console.error(`\n${outcome.warning}`);
+
+  if (summary.isError) console.error(`\n${summary.result}`);
+
+  // Printed on failure too: a run stopped by --max-turns is the one most worth resuming.
   if (summary.sessionId) {
-    console.log(`\nSession: ${summary.sessionId}`);
+    console.log(
+      `\nSession: ${summary.sessionId}\n${DIM}Continue it with --resume ${summary.sessionId} "<message>" (same --cwd).${RESET}`,
+    );
   }
-  return 0;
+  return outcome.code;
+}
+
+/**
+ * Exits once stdout has drained: writes to a pipe are asynchronous on macOS,
+ * and exiting straight away can cut off the ledger and the session id.
+ */
+function exitAfterFlush(code: number): void {
+  process.stdout.write("", () => process.exit(code));
 }
 
 main().then(
-  (code) => process.exit(code),
+  (code) => exitAfterFlush(code),
   (error: unknown) => {
-    console.error(error instanceof Error ? error.stack : error);
-    process.exit(1);
+    // Configuration mistakes (a misnamed customization file, a missing prompt)
+    // reach here; their message is what the user needs. DEBUG=1 shows the stack.
+    console.error(
+      error instanceof Error
+        ? process.env.DEBUG
+          ? error.stack
+          : error.message
+        : error,
+    );
+    exitAfterFlush(1);
   },
 );

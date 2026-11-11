@@ -1,9 +1,25 @@
-import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
-import { BASE_ROLES } from "../roles/base.js";
+import { AGENTS } from "../agents/index.js";
+import {
+  ADVISORY_MAX_TURNS,
+  type AgentSpec,
+  IMPLEMENTER_MAX_TURNS,
+} from "../agents/shared.js";
+import { BUILT_IN_AGENTS, RESERVED_NAMES } from "../project-agents.js";
+import { generic } from "./generic.js";
 import type { ProjectProfile, RoleOverlay } from "./types.js";
 
+/**
+ * One specialist on a resolved team: its definition, and the profile
+ * material its prompt is rendered with (see loadTeam in team.ts).
+ */
+export interface TeamMember extends Omit<AgentSpec, "promptFile"> {
+  /** The built-in prompt; absent for a role the profile introduces. */
+  promptFile?: URL;
+  overlay: RoleOverlay;
+}
+
 /** A profile chain flattened into the team the orchestrator runs. */
-export interface ResolvedTeam {
+export interface ResolvedProfile {
   /** The selected profile, most specific. */
   profile: ProjectProfile;
   /** Ids from root ancestor to the selected profile. */
@@ -11,7 +27,8 @@ export interface ResolvedTeam {
   /** Shared context, parent-first; empty when no profile in the chain sets it. */
   context: string;
   routing: string[];
-  agents: Record<string, AgentDefinition>;
+  /** In roster order: team roles first, then roles the profile adds. */
+  members: Record<string, TeamMember>;
 }
 
 /**
@@ -46,7 +63,7 @@ export function profileChain(
   return chain;
 }
 
-function joinBlocks(...blocks: Array<string | undefined>): string {
+export function joinBlocks(...blocks: Array<string | undefined>): string {
   return blocks
     .map((block) => block?.trim())
     .filter((block): block is string => Boolean(block))
@@ -64,31 +81,54 @@ function mergeOverlay(parent: RoleOverlay, child: RoleOverlay): RoleOverlay {
   return merged;
 }
 
-function bullets(heading: string, items: readonly string[] | undefined) {
-  return items?.length
-    ? `## ${heading}\n${items.map((item) => `- ${item}`).join("\n")}`
-    : undefined;
-}
+/** Lower-case, no dots: the name is also a .claude/dev-team file name. */
+const ROLE_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
-function renderPrompt(
-  identity: string,
-  core: string,
-  projectName: string,
-  sharedContext: string,
+/**
+ * Names a profile may not give a new role: the prompts a project customizes
+ * besides the roles, the ledger's own role names, and Claude Code's built-in
+ * agents, which the safety policy keeps off the manager's menu.
+ */
+const UNAVAILABLE = new Set(
+  ["orchestrator", "team", ...RESERVED_NAMES, ...BUILT_IN_AGENTS].map((n) =>
+    n.toLowerCase(),
+  ),
+);
+
+const WRITES = new Set(["Write", "Edit", "Bash"]);
+
+function newMember(
+  name: string,
+  profile: ProjectProfile,
   overlay: RoleOverlay,
-): string {
-  const project = joinBlocks(
-    sharedContext && `## Project: ${projectName}\n\n${sharedContext}`,
-    overlay.context && `## Your role on this project\n\n${overlay.context}`,
-    bullets("Specialist expertise", overlay.expertise),
-    bullets("Project standards", overlay.standards),
-  );
-  // With no project material this is exactly `identity\n\ncore`, so the
-  // generic profile reproduces the original prompts byte for byte.
-  return joinBlocks(identity, core, project);
+): TeamMember {
+  const { description, model, tools, identity, core } = overlay;
+  if (!description || !model || !tools || !identity || !core) {
+    throw new Error(
+      `Role "${name}" in profile "${profile.id}" is not a team role, so it must define description, model, tools, identity and core.`,
+    );
+  }
+  if (!ROLE_NAME.test(name) || UNAVAILABLE.has(name)) {
+    throw new Error(
+      `Profile "${profile.id}" cannot add a role named "${name}": use lower-case letters, digits and dashes, and not a reserved or built-in agent name.`,
+    );
+  }
+  return {
+    description,
+    model,
+    tools: [...tools],
+    maxTurns:
+      overlay.maxTurns ??
+      (tools.some((tool) => WRITES.has(tool))
+        ? IMPLEMENTER_MAX_TURNS
+        : ADVISORY_MAX_TURNS),
+    overlay,
+  };
 }
 
-export function composeTeam(chain: readonly ProjectProfile[]): ResolvedTeam {
+export function composeProfile(
+  chain: readonly ProjectProfile[],
+): ResolvedProfile {
   const profile = chain.at(-1);
   if (!profile) throw new Error("Cannot compose a team from an empty chain.");
 
@@ -102,38 +142,35 @@ export function composeTeam(chain: readonly ProjectProfile[]): ResolvedTeam {
     }
   }
 
-  // Base roles keep their order; roles a profile introduces follow them.
+  const base: Readonly<Record<string, AgentSpec>> = AGENTS;
+  // Team roles keep their order; roles a profile introduces follow them.
   const names = [
-    ...Object.keys(BASE_ROLES),
-    ...[...overlays.keys()].filter((name) => !(name in BASE_ROLES)),
+    ...Object.keys(base),
+    ...[...overlays.keys()].filter((name) => !Object.hasOwn(base, name)),
   ];
 
-  const agents: Record<string, AgentDefinition> = {};
+  const members: Record<string, TeamMember> = {};
   for (const name of names) {
-    const base = BASE_ROLES[name];
     const overlay = overlays.get(name) ?? {};
     if (overlay.enabled === false) continue;
-
-    const description = overlay.description ?? base?.description;
-    const identity = overlay.identity ?? base?.identity;
-    const core = overlay.core ?? base?.core;
-    if (!description || !identity || !core) {
-      throw new Error(
-        `Role "${name}" in profile "${profile.id}" is not a base role, so it must define description, identity and core.`,
-      );
+    const spec = Object.hasOwn(base, name) ? base[name] : undefined;
+    if (!spec) {
+      members[name] = newMember(name, profile, overlay);
+      continue;
     }
-
-    const model = overlay.model ?? base?.model;
-    const tools = overlay.tools ?? base?.tools;
-    agents[name] = {
-      description,
-      ...(model === undefined ? {} : { model }),
-      ...(tools === undefined ? {} : { tools: [...tools] }),
-      prompt: renderPrompt(identity, core, profile.name, context, overlay),
+    members[name] = {
+      ...spec,
+      ...(overlay.description === undefined
+        ? {}
+        : { description: overlay.description }),
+      ...(overlay.model === undefined ? {} : { model: overlay.model }),
+      ...(overlay.tools === undefined ? {} : { tools: [...overlay.tools] }),
+      ...(overlay.maxTurns === undefined ? {} : { maxTurns: overlay.maxTurns }),
+      overlay,
     };
   }
 
-  if (Object.keys(agents).length === 0) {
+  if (Object.keys(members).length === 0) {
     throw new Error(`Profile "${profile.id}" disables every role.`);
   }
 
@@ -142,6 +179,11 @@ export function composeTeam(chain: readonly ProjectProfile[]): ResolvedTeam {
     chain: chain.map((p) => p.id),
     context,
     routing,
-    agents,
+    members,
   };
+}
+
+/** The stack-neutral team, with no profile material. */
+export function genericProfile(): ResolvedProfile {
+  return composeProfile([generic]);
 }

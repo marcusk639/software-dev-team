@@ -1,7 +1,11 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { composeTeam, profileChain, type ResolvedTeam } from "./compose.js";
+import {
+  composeProfile,
+  profileChain,
+  type ResolvedProfile,
+} from "./compose.js";
 import { generic } from "./generic.js";
 import { recoveryPlatform } from "./recovery-platform.js";
 import { regroup } from "./regroup/index.js";
@@ -79,14 +83,14 @@ export interface ProfileSelection {
   cwd: string;
 }
 
-export async function resolveTeam(
+export async function resolveProfile(
   selection: ProfileSelection,
-): Promise<ResolvedTeam> {
+): Promise<ResolvedProfile> {
   const { selector, cwd } = selection;
   if (selector !== undefined && looksLikePath(selector)) {
     const external = await importProfile(selector);
-    return composeTeam(profileChain(external.id, registry([external])));
+    return composeProfile(profileChain(external.id, registry([external])));
   }
   const id = selector ?? detectProfileId(cwd);
-  return composeTeam(profileChain(id, registry()));
+  return composeProfile(profileChain(id, registry()));
 }

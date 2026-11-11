@@ -1,6 +1,6 @@
 # software-dev-team
 
-An autonomous software development team built on the Claude Agent SDK. An Engineering Manager agent decomposes a task and delegates it to specialists (product manager, architect, UX designer, backend, frontend and mobile engineers, database specialist, QA, monetization, strategy). It holds each result to an evidence bar before reporting it done.
+An autonomous software development team built on the Claude Agent SDK. An Engineering Manager agent decomposes a task and delegates it to specialists (product manager, architect, UX designer, backend, frontend and mobile engineers, database specialist, QA, code reviewer, monetization, strategy). It holds each result to an evidence bar before reporting it done.
 
 The specialists are **configured per project**. A project profile turns the stack-neutral team into specialists who know the project's technologies, conventions, commands and invariants. For example, under the `regroup` profile the frontend engineer is a React Native / Redux Toolkit / React Query / Stripe specialist. The backend engineer becomes a GCP, Cloud Functions v2, Firestore and Stripe Connect specialist.
 
@@ -18,7 +18,9 @@ pnpm start --profile ./profiles/acme.ts --cwd ../acme "…"     # use a profile 
 
 Without `--profile`, the profile is detected from `--cwd`, and the most specific match wins. Anything under `recovery-platform/regroup/` gets `regroup`. The rest of the monorepo gets `recovery-platform`, and everything else gets `generic` (the original stack-neutral team). The active profile is printed at startup.
 
-Other options: `--yes` (auto-approve tool use; the safety hooks still block destructive commands), `--verbose`, `--max-turns <n>`, `--model <name>`, `--file <task.md>`. The team edits real files in `--cwd`, and loads that repository's `.claude` settings and hooks, so point it only at repositories you trust.
+`pnpm start --help` lists the other options (`--yes`, `--allow`, `--resume`, `--strict`, `--max-turns`, `--max-budget`, …). The team edits real files in `--cwd`, and loads that repository's `.claude` settings and hooks, so point it only at repositories you trust.
+
+A profile is the built-in layer. A project can still customize any prompt with files in `<cwd>/.claude/dev-team/` (see `--help`); those apply on top of the profile.
 
 ## Built-in profiles
 
@@ -42,16 +44,18 @@ Under `regroup`:
 
 ## How composition works
 
-`src/roles/base.ts` defines the stack-neutral roles. Each has an `identity` line, a `core` (what it produces, its standards and rules), a model and a tool set. A profile (`src/profiles/types.ts`) overlays them:
+`src/agents/` defines the stack-neutral roles: each has a definition (`index.ts`: description, model, tools, turn cap) and a prompt (`prompt.md`) made of `<section>` blocks such as `<role>`, `<standards>`, `<workflow>`, `<output_format>` and `<verification>`. A profile (`src/profiles/types.ts`) overlays them:
 
 ```ts
 interface RoleOverlay {
   enabled?: boolean;              // false removes the role
   description?: string;           // what the manager routes on
   model?: string;
-  tools?: readonly string[];
-  identity?: string;              // replaces "You are the …"
-  core?: string;                  // replaces the generic standards where they don't fit the stack
+  tools?: readonly ToolName[];
+  maxTurns?: number;
+  identity?: string;              // replaces the <role> section
+  core?: string;                  // replaces <standards> and drops <workflow>, where they don't fit the stack
+  outputFormat?: string;          // replaces <output_format>
   expertise?: readonly string[];  // technologies and techniques the role is expert in
   standards?: readonly string[];  // project practices it must follow
   context?: string;               // paths, commands, gotchas, docs to read first
@@ -60,9 +64,9 @@ interface RoleOverlay {
 
 A profile also carries shared `context`, which every agent and the manager receive. It can carry `routing` rules that the manager applies over its general routing, and an optional `detect(cwd)`.
 
-Profiles chain with `extends`. Down the chain, scalar fields are overridden by the child. `expertise`, `standards`, `context` and `routing` accumulate parent-first, so a product profile adds to its platform profile rather than repeating it. A role name that is not a base role defines a new role, which must supply `description`, `identity` and `core`.
+Profiles chain with `extends`. Down the chain, scalar fields are overridden by the child. `expertise`, `standards`, `context` and `routing` accumulate parent-first, so a product profile adds to its platform profile rather than repeating it. A role name that is not a team role defines a new role, which must supply `description`, `model`, `tools`, `identity` and `core`, and should supply an `outputFormat` so its report has the shape the manager expects. A new role is on the manager's roster, can be delegated to and has its model pinned by the safety policy, like any team role.
 
-Each agent's prompt is rendered as: identity, core, `## Project: <name>` (shared context), `## Your role on this project`, `## Specialist expertise`, `## Project standards`. With no profile material the prompt is exactly identity and core, so `generic` reproduces the original team byte for byte (enforced by a test).
+Each agent's prompt is rendered as: its sections with the overlay applied, then a `<project>` section holding `## Project: <name>` (shared context), `## Your role on this project`, `## Specialist expertise` and `## Project standards`, then the project's `.claude/dev-team` customizations and the shared team conventions. The manager's prompt gets `<project>` and `<project_routing>` sections. With no profile material nothing is added, so `generic` is exactly the built-in team (enforced by a test).
 
 ## Writing a profile
 

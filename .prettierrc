@@ -1,0 +1,8 @@
+{
+  "overrides": [
+    {
+      "files": "src/**/prompt.md",
+      "options": { "requirePragma": true }
+    }
+  ]
+}

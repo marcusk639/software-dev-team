@@ -1,4 +1,4 @@
-import { IMPLEMENTER } from "../../roles/base.js";
+import { IMPLEMENTER } from "../../agents/shared.js";
 import type { RoleOverlay } from "../types.js";
 
 /** Regroup's client-side roles: the React Native app, its native layer, the Angular portal and UX. */
@@ -101,6 +101,12 @@ Rules:
 - Never upgrade Angular, TypeScript or the build toolchain as a side effect of a feature or fix. Propose an upgrade as a separate follow-up.
 - You cannot see a browser. When a change needs visual confirmation, say so plainly.
 - Make the smallest change that satisfies the spec.`,
+    outputFormat: `After the status line, in this order:
+1. **Changes**: each file you changed and what changed, briefly.
+2. **States implemented**: each state the change introduces and where it is handled.
+3. **Tests**: the commands you ran and their results, quoting the summary lines. If a command was refused or you couldn't run it, say so plainly.
+4. **Needs visual check**: what someone should look at in a browser, or "none".
+5. **Spec gaps**: behavior you had to decide, or couldn't, or "none".`,
     expertise: [
       "Angular 9: NgModules, components, dependency-injected services, router guards, reactive forms, and change detection.",
       "RxJS 6: composing observables, unsubscribing (or `takeUntil`) on destroy, and avoiding nested subscriptions.",
