@@ -6,21 +6,27 @@ import { createRenderer } from "./render.js";
 import {
   loadOrchestratorPrompt,
   ORCHESTRATOR,
-  PROMPT_NAMES,
+  promptNames,
   runTeam,
 } from "./orchestrator/index.js";
+import type { ResolvedProfile } from "./profiles/compose.js";
+import { BUILT_IN_PROFILES, resolveProfile } from "./profiles/registry.js";
 import { loadProjectAgents } from "./project-agents.js";
 import { CUSTOMIZATION_DIR, loadCustomizations } from "./prompts.js";
-import { AGENTS, loadTeam, ROLES, TEAM_CONVENTIONS } from "./team.js";
+import { loadTeam, TEAM_CONVENTIONS } from "./team.js";
 
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
+
+function describeProfile(profile: ResolvedProfile): string {
+  return `profile ${profile.chain.join(" → ")}  (${profile.profile.name})`;
+}
 
 async function main(): Promise<number> {
   let cli: ParsedArgs;
   try {
     cli = parseArgs(process.argv.slice(2));
-    if (cli.kind !== "help") checkProjectDir(cli.cwd);
+    if (cli.kind === "run" || cli.kind === "roles") checkProjectDir(cli.cwd);
     // Validated now so a bad --allow rule is a usage error, not a failure
     // mid-run. Its warnings are printed by runTeam, with the run's others.
     if (cli.kind === "run") {
@@ -36,12 +42,28 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  if (cli.kind === "profiles") {
+    for (const profile of BUILT_IN_PROFILES) {
+      const parent = profile.extends ? `  extends ${profile.extends}` : "";
+      console.log(`${profile.id}${parent}\n  ${profile.summary}\n`);
+    }
+    return 0;
+  }
+
+  let profile: ResolvedProfile;
+  try {
+    profile = await resolveProfile({ selector: cli.profile, cwd: cli.cwd });
+  } catch (error) {
+    console.error((error as Error).message);
+    return 2;
+  }
+
   if (cli.kind === "roles") {
     // Loading every prompt here makes --roles a cheap check that none is
-    // missing and that the project's customizations are valid.
-    const customizations = loadCustomizations(cli.cwd, PROMPT_NAMES);
-    loadTeam(customizations);
-    loadOrchestratorPrompt(customizations);
+    // missing and that the profile and the project's customizations are valid.
+    const customizations = loadCustomizations(cli.cwd, promptNames(profile));
+    const team = loadTeam(customizations, profile);
+    loadOrchestratorPrompt(customizations, profile);
     const status = (name: string) => {
       const custom = customizations.get(name);
       if (!custom) return "";
@@ -53,17 +75,18 @@ async function main(): Promise<number> {
       ].filter(Boolean);
       return `  ${DIM}(${kinds.join("; ")} by ${CUSTOMIZATION_DIR})${RESET}`;
     };
+    console.log(`${describeProfile(profile)}\n`);
     console.log(`${ORCHESTRATOR}${status(ORCHESTRATOR)}\n`);
     console.log(
       `${TEAM_CONVENTIONS}${status(TEAM_CONVENTIONS)}\n  Conventions shared by every specialist.\n`,
     );
-    for (const role of ROLES) {
+    for (const [role, agent] of Object.entries(team)) {
       console.log(
-        `${role}  [${AGENTS[role].model ?? "default"}]${status(role)}\n  ${AGENTS[role].description}\n`,
+        `${role}  [${agent.model ?? "default"}]${status(role)}\n  ${agent.description}\n`,
       );
     }
     // The same checks a run applies, so a rejected agent shows up here first.
-    const project = loadProjectAgents(cli.cwd);
+    const project = loadProjectAgents(cli.cwd, Object.keys(team));
     for (const agent of project.agents) {
       console.log(
         `${agent.name}  [${agent.model ?? "default"}]  ${DIM}(project agent from .claude/agents)${RESET}\n`,
@@ -90,9 +113,12 @@ async function main(): Promise<number> {
     return 2;
   }
 
+  console.error(`${DIM}${describeProfile(profile)}${RESET}`);
+
   const summary = await runTeam({
     task: cli.task,
     cwd: cli.cwd,
+    profile,
     autoApprove: cli.autoApprove,
     allow: cli.allow,
     resume: cli.resume,

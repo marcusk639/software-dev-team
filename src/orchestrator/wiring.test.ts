@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { HookInput, Options } from "@anthropic-ai/claude-agent-sdk";
+import { resolveProfile } from "../profiles/registry.js";
 import { ROLES } from "../team.js";
 import { prepareRun } from "./index.js";
 
@@ -180,6 +181,31 @@ describe("runTeam wiring", () => {
     );
     assert.equal(await delegate("helper"), undefined);
     assert.equal(await delegate("loose", "haiku"), undefined);
+  });
+
+  it("lets the manager delegate to a role the profile adds, with its model pinned", async () => {
+    const own = target();
+    writeFileSync(
+      join(own, ".claude", "agents", "web.md"),
+      "---\nname: web-engineer\nmodel: haiku\n---\n",
+    );
+    const profile = await resolveProfile({ selector: "regroup", cwd: own });
+    const { queryOptions, warnings } = prepareRun({
+      task: "t",
+      cwd: own,
+      autoApprove: true,
+      profile,
+    });
+    assert.equal(queryOptions.agents?.["web-engineer"]?.model, "sonnet");
+    const delegate = (model?: string) =>
+      preToolUse(queryOptions, "Agent", {
+        subagent_type: "web-engineer",
+        prompt: "p",
+        ...(model ? { model } : {}),
+      });
+    assert.equal(await delegate(), undefined);
+    assert.match((await delegate("haiku")) ?? "", /model its definition sets/);
+    assert.ok(warnings.some((w) => /web-engineer.*team role/.test(w)));
   });
 
   it("rejects project agents that shadow built-ins or team roles, with warnings", async () => {

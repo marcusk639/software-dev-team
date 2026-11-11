@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
-import { ROLES } from "./team.js";
+import { ROLES } from "./agents/index.js";
 
 /**
  * Agent types Claude Code ships with (SDK 0.3.283). A project agent with one
@@ -21,7 +21,7 @@ export const BUILT_IN_AGENTS: readonly string[] = [
 ];
 
 /** Role names the ledger writes itself (see ledger.ts), compared ignoring case. */
-const RESERVED_NAMES: readonly string[] = ["manager", "unknown"];
+export const RESERVED_NAMES: readonly string[] = ["manager", "unknown"];
 
 /** An agent the target repo defines in `.claude/agents`. */
 export interface ProjectAgent {
@@ -46,7 +46,11 @@ const VALID_NAME = /^[A-Za-z0-9][\w-]*$/;
  * read, or when it is a symlink that leaves `.claude/agents` or cannot be
  * resolved.
  */
-export function loadProjectAgents(cwd: string): {
+export function loadProjectAgents(
+  cwd: string,
+  /** The team the run uses, whose role names project agents may not take. */
+  teamRoles: readonly string[] = ROLES,
+): {
   agents: ProjectAgent[];
   warnings: string[];
 } {
@@ -62,7 +66,7 @@ export function loadProjectAgents(cwd: string): {
   }
   const realDir = realpathSync(dir);
   const builtIns = new Set(BUILT_IN_AGENTS.map((n) => n.toLowerCase()));
-  const roles = new Set<string>(ROLES.map((n) => n.toLowerCase()));
+  const roles = new Set<string>(teamRoles.map((n) => n.toLowerCase()));
   const agents: ProjectAgent[] = [];
   const warnings: string[] = [];
   const seen = new Set<string>();

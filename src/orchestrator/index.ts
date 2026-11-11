@@ -24,38 +24,56 @@ import {
   renderPrompt,
   withAppended,
 } from "../prompts.js";
-import {
-  AGENTS,
-  loadTeam,
-  ROLES,
-  TEAM_CONVENTIONS,
-  TEAM_PLUGIN_DIR,
-} from "../team.js";
+import { genericProfile, type ResolvedProfile } from "../profiles/compose.js";
+import { loadTeam, TEAM_CONVENTIONS, TEAM_PLUGIN_DIR } from "../team.js";
 
 /** The name a project uses to customize the manager's prompt. */
 export const ORCHESTRATOR = "orchestrator";
 
-/** Every prompt a project may customize. */
-export const PROMPT_NAMES: readonly string[] = [
-  ORCHESTRATOR,
-  TEAM_CONVENTIONS,
-  ...ROLES,
-];
+/** Every prompt a project may customize for a run with this profile. */
+export function promptNames(
+  profile: ResolvedProfile = genericProfile(),
+): string[] {
+  return [ORCHESTRATOR, TEAM_CONVENTIONS, ...Object.keys(profile.members)];
+}
 
 const ROSTER = "{{roster}}";
+
+/**
+ * The profile's project context and routing rules for the manager, as
+ * sections after its general ones; empty for a profile with neither.
+ */
+function projectSections(profile: ResolvedProfile): string {
+  const blocks: string[] = [];
+  if (profile.context) {
+    blocks.push(
+      `<project>\n## Project: ${profile.profile.name}\n\nEvery specialist already receives this context in its own instructions.\n\n${profile.context}\n</project>`,
+    );
+  }
+  if (profile.routing.length) {
+    blocks.push(
+      `<project_routing>\nWhere these conflict with the general routing above, these win.\n\n${profile.routing.map((rule) => `- ${rule}`).join("\n")}\n</project_routing>`,
+    );
+  }
+  return blocks.join("\n\n");
+}
 
 /**
  * Rendered per run so edits to prompt.md take effect on the next run. The
  * built-in prompt, or a project's replacement of it, is rendered strictly, so
  * a stray `{{` there is an error. A section override only has {{roster}}
  * filled and keeps any other braces as literal text, as appended text does.
+ * The profile's <project> and <project_routing> sections follow the built-in
+ * prompt, where a section override can replace them; a replacement of the
+ * whole prompt replaces them too.
  */
 export function loadOrchestratorPrompt(
   customizations: ReadonlyMap<string, PromptCustomization> = new Map(),
+  profile: ResolvedProfile = genericProfile(),
 ): string {
-  const roster = ROLES.map(
-    (role) => `- ${role}: ${AGENTS[role].description}`,
-  ).join("\n");
+  const roster = Object.entries(profile.members)
+    .map(([role, member]) => `- ${role}: ${member.description}`)
+    .join("\n");
   const custom = customizations.get(ORCHESTRATOR);
   const base =
     custom?.replace ?? loadPrompt(new URL("./prompt.md", import.meta.url));
@@ -70,8 +88,10 @@ export function loadOrchestratorPrompt(
         text.split(ROSTER).join(roster),
       ]),
     );
+  const rendered = renderPrompt(base, { roster });
+  const project = custom?.replace ? "" : projectSections(profile);
   const body = customizeBody(
-    renderPrompt(base, { roster }),
+    project ? `${rendered}\n\n${project}` : rendered,
     sections && { sections },
     "The orchestrator prompt",
   );
@@ -91,6 +111,8 @@ const DEFAULT_MAX_TURNS = 60;
 export interface RunOptions {
   task: string;
   cwd: string;
+  /** The project profile the team is composed from; defaults to the generic team. */
+  profile?: ResolvedProfile | undefined;
   autoApprove: boolean;
   /** Extra permission rules from --allow, on top of allowlist.ts. */
   allow?: readonly string[] | undefined;
@@ -133,18 +155,20 @@ export function prepareRun(options: RunOptions): {
   /** Information only (see AllowRules.notices); --strict ignores these. */
   notices: string[];
 } {
-  const project = loadProjectAgents(options.cwd);
+  const profile = options.profile ?? genericProfile();
+  const roles = Object.keys(profile.members);
+  const project = loadProjectAgents(options.cwd, roles);
   // Validated once; the read roots come from the same validated list.
   const rules = prepareAllowRules(DEFAULT_ALLOWED_TOOLS, options.allow ?? [], {
     cwd: options.cwd,
   });
   const policy = createPolicy({
     cwd: options.cwd,
-    agents: [...ROLES, ...project.agents.map((agent) => agent.name)],
+    agents: [...roles, ...project.agents.map((agent) => agent.name)],
     // A project agent that declares a model gets the same protection as a
     // team role: the manager may not swap it for a cheaper or other model.
     pinnedModels: [
-      ...ROLES.filter((role) => AGENTS[role].model !== undefined),
+      ...roles.filter((role) => profile.members[role]!.model !== undefined),
       ...project.agents.flatMap((agent) =>
         agent.model === undefined ? [] : [agent.name],
       ),
@@ -159,17 +183,20 @@ export function prepareRun(options: RunOptions): {
     secretValues: policy.secretValues,
   });
   const safety = createSafetyHooks(policy, ledger.block);
-  const customizations = loadCustomizations(options.cwd, PROMPT_NAMES);
+  const customizations = loadCustomizations(
+    options.cwd,
+    promptNames(profile),
+  );
 
   const queryOptions: Options = {
-    agents: loadTeam(customizations),
+    agents: loadTeam(customizations, profile),
     cwd: options.cwd,
     // The preset carries Claude Code's tool instructions; `append` layers the
     // manager role on top rather than replacing them.
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
-      append: loadOrchestratorPrompt(customizations),
+      append: loadOrchestratorPrompt(customizations, profile),
     },
     tools: { type: "preset", preset: "claude_code" },
     allowedTools: [...rules.allowedTools],

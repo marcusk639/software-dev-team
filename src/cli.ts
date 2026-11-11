@@ -3,6 +3,8 @@ import { readFileSync, statSync } from "node:fs";
 export interface Cli {
   task: string;
   cwd: string;
+  /** A built-in profile id or a path to a profile module; detected from cwd when absent. */
+  profile?: string | undefined;
   autoApprove: boolean;
   verbose: boolean;
   /** Exit non-zero when the ledger records calls to check, even if the run succeeded. */
@@ -18,7 +20,8 @@ export interface Cli {
 export type ParsedArgs =
   | ({ kind: "run" } & Cli)
   | { kind: "help" }
-  | { kind: "roles"; cwd: string };
+  | { kind: "profiles" }
+  | { kind: "roles"; cwd: string; profile?: string };
 
 export function usage(): string {
   return `software-dev-team — an autonomous software development team
@@ -28,9 +31,14 @@ export function usage(): string {
   pnpm start --resume <id> "<answer>"  continue a run, e.g. to answer its question
   pnpm start --roles [--cwd <path>]    list the specialists, checking the
                                        project's prompt customizations, and exit
+  pnpm start --profiles                list the built-in project profiles and exit
 
 Options
   --cwd <path>        project the team works in (default: current directory)
+  --profile <id|path> project profile: a built-in id, or a path to a module
+                      whose default export is a profile (default: detected
+                      from --cwd, else "generic"). It specializes the roles
+                      for the project's stack and may add roles.
   --file <path>       read the task from a file instead of the command line
   -y, --yes           run unattended: file edits inside --cwd and the commands
                       acceptEdits approves (mkdir, touch, rm, rmdir, mv, cp,
@@ -73,7 +81,9 @@ every specialist shares):
   <name>.<section>.md  replaces one <section> of it, e.g. qa-tester.output_format.md
   <name>.replace.md    replaces the whole prompt
 --roles --cwd <path> checks them. A replacement of the manager's prompt, or of
-its <team> section, must keep {{roster}}.
+its <team> section, must keep {{roster}}. They apply on top of the profile,
+whose material is in each prompt's <project> section (and the manager's
+<project_routing>); <name>.replace.md replaces that too.
 
 The team reads and writes real files in --cwd. Point it at a project directory,
 not at this one, unless you mean for it to edit itself.`;
@@ -92,6 +102,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let file: string | undefined;
   let resume: string | undefined;
   let roles = false;
+  let profiles = false;
+  let profile: string | undefined;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]!;
@@ -101,6 +113,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
         return { kind: "help" };
       case "--roles":
         roles = true;
+        break;
+      case "--profiles":
+        profiles = true;
+        break;
+      case "--profile":
+        profile = expect(argv, ++i, "--profile");
         break;
       case "--yes":
       case "-y":
@@ -153,7 +171,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
-  if (roles) return { kind: "roles", cwd };
+  if (profiles) return { kind: "profiles" };
+  if (roles) {
+    return profile === undefined
+      ? { kind: "roles", cwd }
+      : { kind: "roles", cwd, profile };
+  }
 
   if (file !== undefined && positional.length > 0) {
     throw new Error("Give either --file or a task as text, not both.");
@@ -175,6 +198,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     kind: "run",
     task,
     cwd,
+    profile,
     autoApprove,
     verbose,
     strict,
