@@ -139,6 +139,17 @@
   - `src/allowlist.test.ts`
 - **Fails:** a rule change that loosens without a test moving, or a test that moves without the PR text declaring it. The `policy-loosening` and `carve-outs` facts are the starting points.
 
+## test-layouts
+
+- **Source:** `isTestPath` in `src/test-authorship.ts` (`TEST_PATH` and the case-sensitive `CAMEL_TEST_PATH`): which files qa-tester writes count as acceptance tests.
+- **Other sides:**
+  - the naming instruction in the `<test_first_brief>` section of `src/agents/qa-tester/prompt.md`, which tells qa-tester that only files named as tests are locked and listed
+  - the acceptance-test lock described in `src/agents/team/prompt.md` and the red-then-green rule in `src/orchestrator/prompt.md`
+  - the locked-layout list in `docs/deployment.md` (the "Test authorship is enforced for file tools only" limit)
+  - `team.acceptance_tests` in `src/report.ts` and the commit body in `src/publish.ts`, which list what `files()` returns
+  - the layout tables in `src/test-authorship.test.ts`
+- **Fails:** a test named the way its runner expects is neither locked nor listed, so an engineer can edit it and the evidence omits it (class 6, 7). Or a source stub or a look-alike (`ABTest/`, `Contest.cs`) is locked against the engineer who must implement it (class 10).
+
 ## review-config
 
 - `.pr-review/**`, `.github/workflows/pr-review.yml` and `.github/workflows/pr-review-learn.yml` are the reviewer itself. Any change is a self-edit (the kit's procedure). Check that the workflow keeps all of these:
