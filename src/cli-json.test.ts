@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -63,3 +63,18 @@ describe("--output json from the real CLI", () => {
     assert.match(singleJson(stdout).result, /No TTY available/);
   });
 });
+
+describe("review round 2: a configuration error before the run is a startup error", () => {
+  it("exits 2 with error_startup, as documented", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "sdt-cli-config-"));
+    mkdirSync(join(cwd, ".claude", "dev-team"), { recursive: true });
+    writeFileSync(join(cwd, ".claude", "dev-team", "no-such-role.md"), "x\n");
+    const { code, stdout } = run(["--output", "json", "--yes", "--cwd", cwd, "x"]);
+    assert.equal(code, 2);
+    const json = singleJson(stdout);
+    assert.equal(json.subtype, "error_startup");
+    assert.match(json.result, /does not match a prompt/);
+    assert.equal(json.team.exit_code, 2);
+  });
+});
+

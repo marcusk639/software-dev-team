@@ -94,6 +94,12 @@ describe("every specialist shares the test-first conventions", () => {
       /deploys, pushes/,
     );
   });
+
+  it("names CI workflows and git hooks among the protected writes", () => {
+    const safety = section(team["backend-engineer"].prompt, "safety");
+    assert.match(safety, /CI workflows \(`\.github\/workflows`\)/);
+    assert.match(safety, /git hooks \(`\.husky`, `\.githooks`, `scripts\/git-hooks`\)/);
+  });
 });
 
 describe("qa-tester writes the acceptance tests, end to end where it can", () => {
