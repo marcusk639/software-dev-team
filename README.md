@@ -98,6 +98,24 @@ export default {
 pnpm start --profile ../acme/team-profile.ts --cwd ../acme "…"
 ```
 
+## GitHub automation
+
+Two Claude workflows run on this repository, as in recovery-platform:
+
+| Workflow | Trigger | What it does |
+| --- | --- | --- |
+| `.github/workflows/claude.yml` | `@claude` in an issue, PR comment, review or review comment, by the owner, a member or a collaborator | Claude answers, or makes the change on a branch. It can run `pnpm test` and `pnpm typecheck`. Agent-authored branches (`hco/*`, `e2e-fix/*`) are skipped. |
+| `.github/workflows/pr-review.yml` | Every non-draft PR into `main` | The advisory, repo-aware reviewer ([pr-review-kit](https://github.com/marcusk639/pr-review-kit)). It comments only and is never a required check. See [docs/plans/pr-reviewer-runbook.md](docs/plans/pr-reviewer-runbook.md). |
+
+Secrets:
+
+- `CLAUDE_CODE_OAUTH_TOKEN` is required by the reviewer, and preferred by `claude.yml`. Create it with `claude setup-token`, then `gh secret set CLAUDE_CODE_OAUTH_TOKEN -R marcusk639/software-dev-team`.
+- Without it, `claude.yml` falls back to `ANTHROPIC_API_KEY`, billed per token.
+- `PR_REVIEW_ID_KEY` and `SECURITY_ADVISORY_TOKEN` are optional. They only enable the reviewer's draft security advisories.
+- GitHub access comes from the Claude GitHub App, which must stay installed on the repository. No personal access token is stored.
+
+`claude.yml` runs from the default branch, so a change to it takes effect only once it is merged.
+
 ## Development
 
 ```bash
