@@ -404,3 +404,28 @@ describe("security review round 4: NODE_OPTIONS that load code", () => {
   }
   allows(["NODE_OPTIONS=--max-old-space-size=4096 npm --prefix recovery-api test"]);
 });
+
+describe("security review round 5: variables set without NAME=", () => {
+  for (const command of [
+    "GIT_WORK_TREE+=/ git grep --untracked -e x -- ':/etc/passwd'",
+    "export GIT_WORK_TREE+=/; git diff etc/passwd dev/null",
+    "read GIT_WORK_TREE <<< /; export GIT_WORK_TREE; git diff etc/passwd dev/null",
+    "printf -v GIT_DIR /other/.git; export GIT_DIR; git grep token",
+    "declare -x CDPATH=/; cd etc; git diff passwd hosts",
+    "GIT_COMMON_DIR=/other/.git git grep token",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /outside the project/);
+    });
+  }
+  for (const command of [
+    "NODE_OPTIONS+=--require=/tmp/x.js npm --prefix recovery-api test",
+    "read NODE_OPTIONS <<< --require=/tmp/x.js; export NODE_OPTIONS; npm --prefix recovery-api test",
+    "printf -v NODE_OPTIONS -- --import=/tmp/x.mjs; export NODE_OPTIONS; npm --prefix recovery-api test",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /npm's shell, config or package directory/);
+    });
+  }
+  allows(["NODE_OPTIONS+=--max-old-space-size=4096 npm --prefix recovery-api test"]);
+});

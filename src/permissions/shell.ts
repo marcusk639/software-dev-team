@@ -126,7 +126,9 @@ const NPM_CONFIG_OVERRIDES = [
   /(?:^|[\s;&|(])npm_config_(?:script_shell|userconfig|globalconfig|prefix|node_options)=/i,
   // Node's own variable for the same setting, when it loads code. Other
   // NODE_OPTIONS (--max-old-space-size for a big Jest run) stay allowed.
-  /(?:^|[^\w])NODE_OPTIONS=[^|;&\n]*?(?:--require|--import|--(?:experimental-)?loader|(?<=[\s=])-r)(?=[\s=]|$)/,
+  // Any way of setting it (`=`, `+=`, `read`, `printf -v`), so a mention of
+  // it anywhere in a command that also names a loader.
+  /(?:^|[^\w$])NODE_OPTIONS(?!\w)[\s\S]*?(?:--require|--import|--(?:experimental-)?loader|(?<=[\s=])-r)(?=[\s=]|$)/,
 ];
 
 const RELEASE_WHY =
@@ -728,13 +730,15 @@ const isNoIndex = (word: string): boolean =>
 
 /**
  * A directory change anywhere in a command: `cd`, `pushd`, `popd` or zsh's
- * `chdir` as a word (not inside a path like `src/cd.ts`), a CDPATH
- * assignment, or GIT_DIR / GIT_WORK_TREE pointing git somewhere else.
+ * `chdir` as a word (not inside a path like `src/cd.ts`), or any mention of
+ * CDPATH, GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR, which point the shell or
+ * git somewhere else. A mention, not only `NAME=`: `NAME+=`, `read NAME`,
+ * `printf -v NAME` and `declare` set them too.
  * Spotting every shell form of a cd at command position (after `coproc`, in
  * an alias, inside `bash -c`) is a losing game, so any of these counts.
  */
 const DIRECTORY_CHANGE =
-  /(?:^|[^\w./-])(?:cd|pushd|popd|chdir)(?=$|[^\w./-])|(?:^|[^\w])(?:CDPATH|GIT_DIR|GIT_WORK_TREE)=/;
+  /(?:^|[^\w./-])(?:cd|pushd|popd|chdir)(?=$|[^\w./-])|(?:^|[^\w$])(?:CDPATH|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR)(?!\w)/;
 
 /**
  * True when `git diff` or `git grep` could read files outside the project:
