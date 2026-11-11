@@ -2,11 +2,11 @@
 # recovery-platform. Mention @claude in an issue, a PR comment, a review or a
 # review comment, and Claude answers or makes the change on a branch.
 #
-# Credentials: the CLAUDE_CODE_OAUTH_TOKEN secret (`claude setup-token`) when
-# it is set, as recovery-platform and pr-review.yml use; otherwise the
-# ANTHROPIC_API_KEY secret. GitHub access comes from the Claude GitHub App,
-# which the action reaches through the job's OIDC token (id-token: write), so
-# no personal access token is stored here.
+# Credentials: a Claude subscription token (`claude setup-token`), held in
+# this repository's ANTHROPIC_API_KEY secret despite the name, and passed as
+# claude_code_oauth_token, as in pr-review.yml. GitHub access comes from the
+# Claude GitHub App, which the action reaches through the job's OIDC token
+# (id-token: write), so no personal access token is used.
 #
 # Every action is pinned by full commit SHA, as in pr-review.yml.
 name: Claude Code
@@ -122,10 +122,8 @@ jobs:
         id: claude
         uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
         with:
-          # The subscription token when the secret exists, else the API key;
-          # never both, since Claude Code would prefer the API key.
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          # A subscription token, stored under ANTHROPIC_API_KEY (see above).
+          claude_code_oauth_token: ${{ secrets.ANTHROPIC_API_KEY }}
 
           # Lets Claude read CI results on PRs.
           additional_permissions: |

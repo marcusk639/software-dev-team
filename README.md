@@ -110,8 +110,7 @@ Three Claude workflows run on this repository, the first two as in recovery-plat
 
 Secrets:
 
-- `CLAUDE_CODE_OAUTH_TOKEN` is required by the reviewer and its learning job, and preferred by `claude.yml`. Create it with `claude setup-token`, then `gh secret set CLAUDE_CODE_OAUTH_TOKEN -R marcusk639/software-dev-team`.
-- Without it, `claude.yml` falls back to `ANTHROPIC_API_KEY`, billed per token.
+- `ANTHROPIC_API_KEY` holds a Claude subscription token, from `claude setup-token`, despite its name. All three workflows pass it to Claude Code as `claude_code_oauth_token`. To replace it, run `gh secret set ANTHROPIC_API_KEY -R marcusk639/software-dev-team` and paste a new token. A real API key in this secret would not work, because it is passed as a subscription token.
 - `PR_REVIEW_ID_KEY` and `SECURITY_ADVISORY_TOKEN` are optional. They only enable the reviewer's draft security advisories.
 - GitHub access comes from the Claude GitHub App, which must stay installed on the repository. None of these workflows uses a personal access token: a `GH_TOKEN` secret, if one is set, is not read by any of them.
 
