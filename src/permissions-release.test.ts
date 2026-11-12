@@ -415,7 +415,7 @@ describe("security review round 5: variables set without NAME=", () => {
     "GIT_COMMON_DIR=/other/.git git grep token",
   ]) {
     it(`denies ${JSON.stringify(command)}`, () => {
-      assert.match(denyReason(policy, "Bash", { command }) ?? "", /outside the project/);
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /outside the project|changes what git runs/);
     });
   }
   for (const command of [
@@ -428,4 +428,54 @@ describe("security review round 5: variables set without NAME=", () => {
     });
   }
   allows(["NODE_OPTIONS+=--max-old-space-size=4096 npm --prefix recovery-api test"]);
+});
+
+describe("security review round 6: variables set by other spellings and computed names", () => {
+  const denied = (commands: string[], why: RegExp) => {
+    for (const command of commands) {
+      it(`denies ${JSON.stringify(command)}`, () => {
+        assert.match(denyReason(policy, "Bash", { command }) ?? "", why);
+      });
+    }
+  };
+  // The git-environment rule, like the directory-change rule, sees every way of setting.
+  denied(
+    [
+      "GIT_CONFIG_COUNT+=1 GIT_CONFIG_KEY_0+=core.fsmonitor GIT_CONFIG_VALUE_0+='sh x.sh' git status",
+      "read GIT_EXEC_PATH <<< /tmp/x; export GIT_EXEC_PATH; git status",
+      "printf -v GIT_SSH_COMMAND 'sh x.sh'; export GIT_SSH_COMMAND; git status",
+      "declare -x GIT_EXTERNAL_DIFF=/tmp/x.sh; git diff",
+    ],
+    /changes what git runs/,
+  );
+  // A name built by expansion can be any variable.
+  denied(
+    [
+      "x=GIT_WORK; export ${x}_TREE=/; git grep --untracked -e x -- ':/etc/passwd'",
+      "x=GIT_WORK; declare -x \"${x}_TREE\"=/; git diff etc/passwd dev/null",
+      "x=GIT_WORK; printf -v \"${x}_TREE\" /; export ${x}_TREE; git grep token",
+      "x=GIT_WORK; read ${x}_TREE <<< /; git grep token",
+      "n=NODE; export ${n}_OPTIONS=--require=/tmp/x.js; npm --prefix recovery-api test",
+      "env ${x}_TREE=/ git grep token",
+      "set -a; . ./vars; set +a; git grep token",
+      "set -o allexport; source ./vars; git grep token",
+    ],
+    /name is computed|exports every variable/,
+  );
+  // NODE_OPTIONS with a loader anywhere, or set from a variable.
+  denied(
+    [
+      "x=--require=/tmp/x.js; NODE_OPTIONS=$x npm --prefix recovery-api test",
+      'NODE_OPTIONS="$x" npm --prefix recovery-api test',
+    ],
+    /npm's shell, config or package directory/,
+  );
+  allows([
+    "export PATH=\"$PATH:/x\"; npm --prefix recovery-api test",
+    "read -r line <<< \"$y\"",
+    "set -euo pipefail; npm --prefix recovery-api test",
+    "grep -rn GIT_DIR src",
+    "echo $GIT_DIR",
+    "NODE_OPTIONS=--max-old-space-size=4096 npm --prefix recovery-api test",
+  ]);
 });

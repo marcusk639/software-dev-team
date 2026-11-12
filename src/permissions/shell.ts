@@ -126,9 +126,23 @@ const NPM_CONFIG_OVERRIDES = [
   /(?:^|[\s;&|(])npm_config_(?:script_shell|userconfig|globalconfig|prefix|node_options)=/i,
   // Node's own variable for the same setting, when it loads code. Other
   // NODE_OPTIONS (--max-old-space-size for a big Jest run) stay allowed.
-  // Any way of setting it (`=`, `+=`, `read`, `printf -v`), so a mention of
-  // it anywhere in a command that also names a loader.
-  /(?:^|[^\w$])NODE_OPTIONS(?!\w)[\s\S]*?(?:--require|--import|--(?:experimental-)?loader|(?<=[\s=])-r)(?=[\s=]|$)/,
+  // NODE_OPTIONS mentioned anywhere, and anywhere in the command a loader
+  // or a NODE_OPTIONS value taken from a variable (which may hold one).
+  /^(?=[\s\S]*(?:^|[^\w$])NODE_OPTIONS(?!\w))(?=[\s\S]*(?:--require|--import|--(?:experimental-)?loader|(?<=[\s=])-r(?=[\s=]|$)|(?:^|[^\w$])NODE_OPTIONS\+?=["']?[^\s"']*[$\x60]))/,
+];
+
+/** Shell builtins that set a variable named by an operand. */
+const SETTERS = String.raw`\b(?:export|declare|typeset|local|readonly|read|printf\s+(?:-\S+\s+)*-v)\b`;
+
+/**
+ * A variable whose name is built by expansion can be any variable
+ * (`export ${x}_TREE=/` sets GIT_WORK_TREE), so no rule naming one can see
+ * it; and `set -a` exports whatever a sourced file sets.
+ */
+const COMPUTED_NAMES = [
+  new RegExp(String.raw`${SETTERS}[^|;&\n<>]*?\s["']?\w*[$\x60]`),
+  /\benv\b[^|;&\n]*\s["']?\w*[$\x60][^\s=]*=/,
+  /\bset\s+(?:[-+]\w*\s+)*(?:-\w*a\w*|-o\s+allexport)(?=\s|$|;)/,
 ];
 
 const RELEASE_WHY =
@@ -302,9 +316,22 @@ const HARD_DENY: Array<{
     // Configuration and programs supplied through the environment.
     pattern:
       // An editor of `true` or `:` only accepts the message or todo list.
-      /(?<![\w$])GIT_(?:CONFIG\w*|DIR|EXEC_PATH|SSH(?:_COMMAND)?|EXTERNAL_DIFF|ASKPASS|PROXY_COMMAND|TEMPLATE_DIR|(?:SEQUENCE_)?EDITOR(?!=['"]?(?:true|:)['"]?(?:\s|$)))=/,
+      /(?<![\w$])GIT_(?:CONFIG\w*|DIR|EXEC_PATH|SSH(?:_COMMAND)?|EXTERNAL_DIFF|ASKPASS|PROXY_COMMAND|TEMPLATE_DIR|(?:SEQUENCE_)?EDITOR(?!\+?=['"]?(?:true|:)['"]?(?:\s|$)))\+?=/,
     why: "changes what git runs",
   },
+  {
+    // The same variables set without `NAME=`: by a declaration builtin,
+    // `read` or `printf -v` (then exported). A plain mention (`grep GIT_DIR`,
+    // `echo $GIT_DIR`) is fine.
+    pattern: new RegExp(
+      String.raw`(?:${SETTERS})[^|;&\n<>]*\s["']?GIT_(?:CONFIG\w*|DIR|EXEC_PATH|SSH(?:_COMMAND)?|EXTERNAL_DIFF|ASKPASS|PROXY_COMMAND|TEMPLATE_DIR|(?:SEQUENCE_)?EDITOR)(?!\w)`,
+    ),
+    why: "changes what git runs",
+  },
+  ...COMPUTED_NAMES.map((pattern) => ({
+    pattern,
+    why: "sets a variable whose name is computed, or exports every variable a script sets",
+  })),
   {
     // Only when sent to a database client: writing a migration file that
     // contains DROP TABLE, or grepping for it, is ordinary work.
