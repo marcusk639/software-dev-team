@@ -8,14 +8,14 @@ This page lists what protects a run and every known way around it, so a deployme
 
 The team reads the target repository, its issues and the task text, and any of that can carry instructions (prompt injection). So assume an agent will try anything its tools allow, and judge each layer by what it stops, not by what the prompts ask:
 
-| Layer                    | Stops                                                                                                                                                                                                                                                                                                  | Where                                                |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
+| Layer                    | Stops                                                                                                                                                                                                                                                                                                                                                    | Where                                                |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | Safety hook (PreToolUse) | Destructive commands, deploys, pushes and PR changes, commands that print secrets or the environment, file-tool writes outside the project or to protected paths. Reads outside the project with Read, Grep and Glob need approval, which an unattended run never gets. Runs in every permission mode, in subagents too, and no allow rule overrides it. | `src/permissions.ts`, `src/permissions/*`            |
-| Permission rules         | Under `--yes`, any tool call that neither `acceptEdits` nor an allow rule approves is refused. This is the guard for everything the hook only screens by text (most Bash).                                                                                                                             | `src/allowlist.ts`, profile `allow` lists, `--allow` |
-| Role guards              | The manager can only delegate; specialists can't delegate; only qa-tester can edit the acceptance tests it wrote (file tools).                                                                                                                                                                         | `src/permissions.ts`, `src/test-authorship.ts`       |
-| The container            | No credentials but the model key, no network beyond the API, read-only root, all capabilities dropped, non-root user, only `/workspace` mounted. This is the boundary for code the team writes and then runs.                                                                                          | `Dockerfile`, [deployment.md §2–5](deployment.md)    |
-| The publish step         | Runs outside the run, with no model; commits and pushes only a `done` run, to a review branch, never forced, never secret files; hooks run without the token.                                                                                                                                          | `src/publish.ts`, [deployment.md §6](deployment.md)  |
-| Human review             | A person reads `changed_files` before merging, including any `package.json`, test config or workflow change.                                                                                                                                                                                           | your process                                         |
+| Permission rules         | Under `--yes`, any tool call that neither `acceptEdits` nor an allow rule approves is refused. This is the guard for everything the hook only screens by text (most Bash).                                                                                                                                                                               | `src/allowlist.ts`, profile `allow` lists, `--allow` |
+| Role guards              | The manager can only delegate; specialists can't delegate; only qa-tester can edit the acceptance tests it wrote (file tools).                                                                                                                                                                                                                           | `src/permissions.ts`, `src/test-authorship.ts`       |
+| The container            | No credentials but the model key, no network beyond the API, read-only root, all capabilities dropped, non-root user, only `/workspace` mounted. This is the boundary for code the team writes and then runs.                                                                                                                                            | `Dockerfile`, [deployment.md §2–5](deployment.md)    |
+| The publish step         | Runs outside the run, with no model; commits and pushes only a `done` run, to a review branch, never forced, never secret files; hooks run without the token.                                                                                                                                                                                            | `src/publish.ts`, [deployment.md §6](deployment.md)  |
+| Human review             | A person reads `changed_files` before merging, including any `package.json`, test config or workflow change.                                                                                                                                                                                                                                             | your process                                         |
 
 The shell rules match command text. They are a second line, not a sandbox: anything an allow rule approves, and anything a team-written script does once an approved command runs it, is bounded only by the container.
 
@@ -25,9 +25,9 @@ Status: **fixed** (closed, with its test), **mitigated** (narrowed, residual ris
 
 | #   | Issue                                                                                 | Severity | Status                 |
 | --- | ------------------------------------------------------------------------------------- | -------- | ---------------------- |
-| S1  | Pre-approved `git diff` read any file outside the project | Medium | fixed |
+| S1  | Pre-approved `git diff` read any file outside the project                             | Medium   | fixed                  |
 | S2  | Bash reads are confined only by approval and a name-based secret list                 | Medium   | mitigated              |
-| S3  | Output redirects from approved commands can write outside the project | Low | mitigated |
+| S3  | Output redirects from approved commands can write outside the project                 | Low      | mitigated              |
 | S4  | Approved commands run code the team writes                                            | Medium   | accepted, mitigated    |
 | S5  | `--allow` accepts rules that approve almost anything                                  | Medium   | open, accepted for now |
 | S6  | The target repository's `.claude` settings, hooks and MCP servers load into every run | Medium   | accepted               |
@@ -35,7 +35,7 @@ Status: **fixed** (closed, with its test), **mitigated** (narrowed, residual ris
 | S8  | The push token reached the repository's hooks during `--publish`                      | High     | fixed                  |
 | S9  | The model credential is readable by code the run executes                             | Medium   | accepted, mitigated    |
 | S10 | Shell rules are pattern-based and have been bypassed before                           | Medium   | mitigated              |
-| S11 | Harness behaviour rests on SDK details verified against one version | Low | verified for 0.3.283 |
+| S11 | Harness behaviour rests on SDK details verified against one version                   | Low      | verified for 0.3.283   |
 | S12 | GitHub workflows run with secrets on comments and PRs                                 | Low      | mitigated              |
 
 ### S1. Pre-approved `git diff` read any file outside the project (fixed)
@@ -146,10 +146,11 @@ It refused every other case the script tries:
 - a chain with `cat` of an outside file.
 
 **What follows:**
+
 - In an unattended run, the spellings the reviewer found on #13 (S1, S10) were not reachable on this version. The hook's rules for them are defense in depth, for interactive approvals and for SDK changes.
 - The script exits 1 if any case expected to be refused runs. **Re-run it before upgrading the SDK, and update this entry.**
 
-0.3.322 is current. **Before upgrading:** also do the supervised live trial and the upgrade checks in [the readiness review](reviews/2026-11-10-standalone-readiness.md) §6. Those include re-verifying the undocumented variable and the pinned hook-ordering test, the one against a target that declares `allow: ["Bash"]`.
+0.3.322 is current. **Before upgrading:** also do the supervised live trial and the upgrade checks in [the readiness review](reviews/2026-11-10-standalone-readiness.md) §6. Those include re-verifying the undocumented variable, and re-checking by hand that a hook deny still wins over a target that declares `allow: ["Bash"]`. No automated test covers that case; it was verified manually against 0.3.283 (`src/orchestrator/index.ts`, the `settingSources` comment).
 
 ### S12. GitHub workflows run with secrets on comments and PRs (mitigated)
 
