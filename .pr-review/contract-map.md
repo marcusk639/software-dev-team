@@ -137,7 +137,8 @@
   - the `denies`, `allows` and `check` case tables in the policy suites (`src/permissions.test.ts`, `src/permissions-bypasses.test.ts`, `src/permissions-round2.test.ts`, `src/permissions-round3.test.ts`, `src/permissions-messages.test.ts`)
   - the accepted false positives in `src/permissions-message-false-positives.test.ts`
   - `src/allowlist.test.ts`
-- **Fails:** a rule change that loosens without a test moving, or a test that moves without the PR text declaring it. The `policy-loosening` and `carve-outs` facts are the starting points.
+  - the register in `docs/security.md`, which names each known gap's rule, test and status
+- **Fails:** a rule change that loosens without a test moving, or a test that moves without the PR text declaring it. The `policy-loosening` and `carve-outs` facts are the starting points. A gap closed or opened without its register entry changing leaves `docs/security.md` wrong.
 
 ## review-config
 

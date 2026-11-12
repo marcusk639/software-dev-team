@@ -174,7 +174,7 @@ What it does:
 
 - It reads the run's result and publishes only a `done` run. Add `--include-partial` to publish `partial` work, marked as such in the commit body.
 - It commits every change in the checkout with `team.commit_message`, or `--message <text>`. The commit body names the session, the outcome and the acceptance tests.
-- It runs the repository's commit hooks, so recovery-platform's test-tamper and secret gates apply. A rejected commit is reported as failed, and nothing is pushed.
+- It runs the repository's commit hooks and its pre-push hook, so recovery-platform's test-tamper and secret gates and its pre-push tests apply. A rejected commit or push is reported as failed, and nothing is pushed. The hooks never see the token: every git call but the push runs without `GITHUB_TOKEN`, `GH_TOKEN` or any variable holding it, and pre-push is run by the step itself, with the arguments and stdin `git push` would give it, before a push that alone has the token and runs no hooks (`--no-verify`, `core.hooksPath=/dev/null`). Any token git can push with is readable by the hooks git push runs, and those hooks run the team's code (recovery-platform's pre-push runs each changed package's `npm test`).
 - It pushes `HEAD` to `refs/heads/<branch>` on `--remote` (default `origin`). It never pushes to the remote's default branch or `main`/`master`, and never force-pushes: a branch with other history is refused.
 - It refuses to commit any file that looks like it holds secrets (`.env*`, keys, credentials).
 - It prints one JSON object (`{"type":"publish","status":"pushed|skipped|failed","reason",…}`) and exits 0 when pushed, 4 when there was nothing to publish (a run not done, or no changes), 1 on failure and 2 on bad arguments.
@@ -182,7 +182,7 @@ What it does:
 **Why a separate step:**
 
 - The GitHub write token is only in a process with no agents in it, and the team's own shell can't push (`git push` is hard-denied in a run). This is the same split pr-review-kit makes between its model step and its publish step.
-- It runs in the container, never on the host, because the repo's hooks call scripts from the working tree that the team could have edited. Run on the host, a commit would run the team's code with the host's access. In the container, it runs where the run did, with only the GitHub token.
+- It runs in the container, never on the host, because the repo's hooks call scripts from the working tree that the team could have edited. Run on the host, a commit would run the team's code with the host's access. In the container, it runs where the run did, with network access to GitHub and no credentials in the hooks' reach.
 
 Give this container network access to github.com only. To get the repo's gates without the team's edits as well, do what its CI test-tamper job does: run `.claude/agent-gates/verify-diff.sh` from the base commit.
 
@@ -215,6 +215,8 @@ Keep the concurrency low. Each job runs up to ten specialists on Opus and Sonnet
 For recovery-platform, the end-to-end layer the team can actually run is the emulator suites. That's where qa-tester puts new end-to-end coverage.
 
 ## 9. Limits you should know
+
+[security.md](security.md) keeps the full register of known security limits, with each one's status and mitigation. The ones that shape a deployment:
 
 - **The safety layer is best-effort.** Its shell rules match command text. A script the team writes and then runs through an approved command (a test file, say) runs whatever is in it. This is why the container has no credentials and no general network.
 - **Test authorship is enforced for file tools only.** Once qa-tester writes a test file (`*.test.*`, `*.spec.*`, `__tests__/`, `test/`, `e2e/`, `maestro/`…), other roles' Write and Edit calls to it are refused. The file is matched by identity (device and inode) as well as path, so a hard link, a renamed directory or another case on a case-insensitive filesystem doesn't get around it. A shell edit (`sed -i`, a redirect) isn't tracked. The code reviewer reads the acceptance tests against their criteria, and the repo's commit gate rejects skipped tests and test-count drops. `acceptance_tests` lists only files qa-tester wrote with file tools.

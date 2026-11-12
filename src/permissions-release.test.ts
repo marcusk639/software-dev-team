@@ -239,3 +239,243 @@ describe("review round 1: code that runs outside the run is not the team's to wr
   });
 });
 
+
+describe("security review: git diff and git grep read only the project", () => {
+  // `Bash(git diff:*)` is pre-approved, so these would read outside the
+  // project with no approval: git diff compares any two files with
+  // --no-index, and switches to it unasked when a path is outside the work tree.
+  for (const command of [
+    "git diff --no-index /etc/passwd /dev/null",
+    "git diff --no-index src/a.ts src/b.ts",
+    "git diff /etc/hosts /dev/null",
+    "git diff -- /etc/hosts src/a.ts",
+    "git diff ~/.config/configstore/firebase-tools.json src/a.ts",
+    "git diff ../outside.txt src/a.ts",
+    'git diff "$HOME/.bash_history" src/a.ts',
+    "git -C / diff etc/passwd dev/null",
+    "git -C / diff --no-index etc/passwd /dev/null",
+    "git grep --no-index -e token /run/secrets",
+    "npm --prefix src test && git diff /etc/hosts /dev/null",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /outside the project/);
+    });
+  }
+  allows([
+    "git diff",
+    "git diff HEAD~1",
+    "git diff main..HEAD -- src/a.ts",
+    "git diff origin/main...HEAD --stat",
+    `git diff -- ${join(project, "src/a.ts")}`,
+    "git diff --cached -U5 src",
+    "git grep -n token src",
+  ]);
+});
+
+describe("security review round 2: abbreviations and directory changes", () => {
+  for (const command of [
+    // git grep's parse-options accepts any unambiguous prefix of --no-index.
+    "git grep --no-inde -e token /run/secrets",
+    "git grep --no-in -e token /run/secrets",
+    // A directory change earlier in the command moves git out of the project.
+    "cd / && git diff etc/passwd dev/null",
+    "cd /; git grep --untracked token",
+    "(cd / && git diff etc/passwd dev/null)",
+    "pushd /etc && git diff passwd hosts",
+    "cd && git diff .bash_history .profile",
+    "cd - && git diff a b",
+    "env -C / git diff etc/passwd dev/null",
+    "env --chdir=/ git diff etc/passwd dev/null",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /outside the project/);
+    });
+  }
+  allows(["git diff --no-indent-heuristic", "git grep -n token src"]);
+});
+
+describe("security review: pre-approved npm commands keep npm's own settings", () => {
+  // `Bash(npm --prefix recovery-api test:*)` approves anything after the
+  // prefix. These would swap the shell npm runs scripts with, load another
+  // npm config, or move the run to another package directory.
+  for (const command of [
+    "npm --prefix recovery-api test --script-shell=/tmp/x.sh",
+    "npm --prefix recovery-api test --script-shell /tmp/x.sh",
+    "npm --prefix recovery-api --userconfig /tmp/rc test",
+    "npm --prefix recovery-api test --globalconfig=/tmp/rc",
+    "npm --prefix recovery-api test --prefix /tmp/x",
+    "npm --prefix recovery-api --prefix=/tmp/x test",
+    "npm_config_script_shell=/tmp/x.sh npm --prefix recovery-api test",
+    "env NPM_CONFIG_PREFIX=/tmp/x npm --prefix recovery-api test",
+    // npm takes unambiguous abbreviations, and -C for --prefix.
+    "npm --prefix recovery-api test --script-s=/tmp/x.sh",
+    "npm --prefix recovery-api test --scr /tmp/x.sh",
+    "npm --prefix recovery-api test --userc=/tmp/rc",
+    "npm --prefix recovery-api test --globalc /tmp/rc",
+    "npm --prefix recovery-api test --prefi=/tmp/x",
+    "npm --prefix recovery-api test -C /tmp/x",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /npm's shell, config or package directory/);
+    });
+  }
+  allows([
+    "npm --prefix recovery-api test",
+    "npm --prefix recovery-api test -- --testPathPattern referrals",
+    "npm --prefix=recovery-api run typecheck",
+    "npm --prefix recovery-api test --prefer-offline",
+    "npm --prefix recovery-api test -- --coverage",
+    "npm test",
+  ]);
+});
+
+describe("security review round 3: a cd may fail, not persist, or be spelled another way", () => {
+  // The hook can't know where git really runs after a cd (it may fail, run
+  // in a subshell, or sit behind ||), so a directory change anywhere in the
+  // command makes git diff and git grep count as reading outside.
+  for (const command of [
+    "(cd src/a/b); git diff ../../../etc/passwd ../../../dev/null",
+    "cd missing/a/b; git diff ../../../etc/passwd x",
+    "cd src/a/b || git diff ../../../etc/passwd x",
+    "cd src/a/b | true; git diff ../../../etc/passwd x",
+    "cd src/a/b & git diff ../../../etc/passwd x",
+    "env -C/ git diff etc/passwd dev/null",
+    "env -iC/ git diff etc/passwd dev/null",
+    "env --chd=/ git diff etc/passwd dev/null",
+    "env --chdi / git diff etc/passwd dev/null",
+    "builtin cd / && git diff etc/passwd dev/null",
+    "command cd / && git diff etc/passwd dev/null",
+    "CDPATH=/ cd etc && git diff passwd hosts",
+    "if cd /; then git diff etc/passwd dev/null; fi",
+    "echo $(cd / && git diff etc/passwd dev/null)",
+    "popd && git diff a b",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /outside the project/);
+    });
+  }
+  allows(["git diff -- src/cd.ts", "git grep -n cdn src", "git log --grep cd"]);
+});
+
+describe("security review round 3: npm node-options", () => {
+  for (const command of [
+    "npm --prefix recovery-api test --node-options=--require=/tmp/x.js",
+    "npm --prefix recovery-api test --nod=--require=/tmp/x.js",
+    "npm --prefix recovery-api test --node-o --require=/tmp/x.js",
+    "npm_config_node_options=--require=/tmp/x.js npm --prefix recovery-api test",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /npm's shell, config or package directory/);
+    });
+  }
+  allows(["npm --prefix recovery-api test --no-coverage"]);
+});
+
+describe("security review round 4: any directory change, wherever it appears", () => {
+  // Spotting every shell form of a cd at command position is a losing game,
+  // so git diff and git grep are refused in any command that changes
+  // directory anywhere, or points git at another work tree.
+  for (const command of [
+    "cd src && git diff a.ts",
+    "coproc cd /; git diff etc/passwd dev/null",
+    "alias go=cd; go /; git diff etc/passwd dev/null",
+    "chdir / && git diff etc/passwd dev/null",
+    "bash -c 'cd / && git diff etc/passwd dev/null'",
+    "GIT_WORK_TREE=/ git diff etc/passwd dev/null",
+    "export GIT_WORK_TREE=/; git diff etc/passwd dev/null",
+    "git grep cd",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /outside the project/);
+    });
+  }
+});
+
+describe("security review round 4: NODE_OPTIONS that load code", () => {
+  for (const command of [
+    "NODE_OPTIONS=--require=/tmp/x.js npm --prefix recovery-api test",
+    "NODE_OPTIONS='--max-old-space-size=4096 -r /tmp/x.js' npm --prefix recovery-api test",
+    "export NODE_OPTIONS=--import=/tmp/x.mjs; npm --prefix recovery-api test",
+    "env NODE_OPTIONS=--loader=/tmp/x.mjs npm --prefix recovery-api test",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /npm's shell, config or package directory|loads code/);
+    });
+  }
+  allows(["NODE_OPTIONS=--max-old-space-size=4096 npm --prefix recovery-api test"]);
+});
+
+describe("security review round 5: variables set without NAME=", () => {
+  for (const command of [
+    "GIT_WORK_TREE+=/ git grep --untracked -e x -- ':/etc/passwd'",
+    "export GIT_WORK_TREE+=/; git diff etc/passwd dev/null",
+    "read GIT_WORK_TREE <<< /; export GIT_WORK_TREE; git diff etc/passwd dev/null",
+    "printf -v GIT_DIR /other/.git; export GIT_DIR; git grep token",
+    "declare -x CDPATH=/; cd etc; git diff passwd hosts",
+    "GIT_COMMON_DIR=/other/.git git grep token",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /outside the project|changes what git runs/);
+    });
+  }
+  for (const command of [
+    "NODE_OPTIONS+=--require=/tmp/x.js npm --prefix recovery-api test",
+    "read NODE_OPTIONS <<< --require=/tmp/x.js; export NODE_OPTIONS; npm --prefix recovery-api test",
+    "printf -v NODE_OPTIONS -- --import=/tmp/x.mjs; export NODE_OPTIONS; npm --prefix recovery-api test",
+  ]) {
+    it(`denies ${JSON.stringify(command)}`, () => {
+      assert.match(denyReason(policy, "Bash", { command }) ?? "", /npm's shell, config or package directory/);
+    });
+  }
+  allows(["NODE_OPTIONS+=--max-old-space-size=4096 npm --prefix recovery-api test"]);
+});
+
+describe("security review round 6: variables set by other spellings and computed names", () => {
+  const denied = (commands: string[], why: RegExp) => {
+    for (const command of commands) {
+      it(`denies ${JSON.stringify(command)}`, () => {
+        assert.match(denyReason(policy, "Bash", { command }) ?? "", why);
+      });
+    }
+  };
+  // The git-environment rule, like the directory-change rule, sees every way of setting.
+  denied(
+    [
+      "GIT_CONFIG_COUNT+=1 GIT_CONFIG_KEY_0+=core.fsmonitor GIT_CONFIG_VALUE_0+='sh x.sh' git status",
+      "read GIT_EXEC_PATH <<< /tmp/x; export GIT_EXEC_PATH; git status",
+      "printf -v GIT_SSH_COMMAND 'sh x.sh'; export GIT_SSH_COMMAND; git status",
+      "declare -x GIT_EXTERNAL_DIFF=/tmp/x.sh; git diff",
+    ],
+    /changes what git runs/,
+  );
+  // A name built by expansion can be any variable.
+  denied(
+    [
+      "x=GIT_WORK; export ${x}_TREE=/; git grep --untracked -e x -- ':/etc/passwd'",
+      "x=GIT_WORK; declare -x \"${x}_TREE\"=/; git diff etc/passwd dev/null",
+      "x=GIT_WORK; printf -v \"${x}_TREE\" /; export ${x}_TREE; git grep token",
+      "x=GIT_WORK; read ${x}_TREE <<< /; git grep token",
+      "n=NODE; export ${n}_OPTIONS=--require=/tmp/x.js; npm --prefix recovery-api test",
+      "env ${x}_TREE=/ git grep token",
+      "set -a; . ./vars; set +a; git grep token",
+      "set -o allexport; source ./vars; git grep token",
+    ],
+    /name is computed|exports every variable/,
+  );
+  // NODE_OPTIONS with a loader anywhere, or set from a variable.
+  denied(
+    [
+      "x=--require=/tmp/x.js; NODE_OPTIONS=$x npm --prefix recovery-api test",
+      'NODE_OPTIONS="$x" npm --prefix recovery-api test',
+    ],
+    /npm's shell, config or package directory/,
+  );
+  allows([
+    "export PATH=\"$PATH:/x\"; npm --prefix recovery-api test",
+    "read -r line <<< \"$y\"",
+    "set -euo pipefail; npm --prefix recovery-api test",
+    "grep -rn GIT_DIR src",
+    "echo $GIT_DIR",
+    "NODE_OPTIONS=--max-old-space-size=4096 npm --prefix recovery-api test",
+  ]);
+});

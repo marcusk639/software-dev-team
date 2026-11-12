@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -229,5 +229,81 @@ describe("pushEnvironment", () => {
     const env = pushEnvironment(undefined, { PATH: "/bin" });
     assert.equal(env.GIT_CONFIG_COUNT, undefined);
     assert.equal(env.PATH, "/bin");
+  });
+});
+
+describe("publish keeps the push token from the repository's hooks", () => {
+  // Hooks run the repository's code, which the team may have written:
+  // recovery-platform's pre-push runs each changed package's npm test.
+  const TOKEN = "test-publish-token-0123456789";
+  const hook = (cwd: string, name: string, body: string) => {
+    writeFileSync(join(cwd, ".git/hooks", name), `#!/bin/sh\n${body}\n`);
+    chmodSync(join(cwd, ".git/hooks", name), 0o755);
+  };
+  const withEnvToken = <T>(run: () => T): T => {
+    const saved = { GITHUB_TOKEN: process.env.GITHUB_TOKEN, GH_TOKEN: process.env.GH_TOKEN };
+    process.env.GITHUB_TOKEN = TOKEN;
+    process.env.GH_TOKEN = TOKEN;
+    try {
+      return run();
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  };
+
+  it("runs pre-commit and pre-push without the token, and still pushes", () => {
+    const { cwd, remote } = project();
+    const seen = join(cwd, "..", "seen");
+    hook(cwd, "pre-commit", `env > "${seen}.commit"`);
+    hook(cwd, "pre-push", `env > "${seen}.push"; cat > "${seen}.stdin"; echo "$@" > "${seen}.args"`);
+    writeFileSync(join(cwd, "src/a.ts"), "x\n");
+    const out = withEnvToken(() =>
+      publish({ cwd, branch: "hco/7-x", result: result("done"), token: TOKEN }),
+    );
+    assert.equal(out.status, "pushed", out.reason ?? "");
+    const b64 = Buffer.from(`x-access-token:${TOKEN}`).toString("base64");
+    for (const file of [`${seen}.commit`, `${seen}.push`]) {
+      const env = readFileSync(file, "utf8");
+      assert.doesNotMatch(env, new RegExp(TOKEN), file);
+      assert.doesNotMatch(env, new RegExp(b64), file);
+      assert.doesNotMatch(env, /extraheader/i, file);
+    }
+    // The hook gets what git push would give it: the refs on stdin, the remote as arguments.
+    assert.match(
+      readFileSync(`${seen}.stdin`, "utf8"),
+      new RegExp(`^refs/heads/hco/7-x ${out.commit} refs/heads/hco/7-x 0{40}\\n$`),
+    );
+    assert.equal(readFileSync(`${seen}.args`, "utf8").trim(), `origin ${remote}`);
+    assert.equal(remoteLog(remote, "hco/7-x").split("\n")[0], "feat(api): add the export endpoint");
+  });
+
+  it("runs no hook while the push holds the token, not even reference-transaction", () => {
+    const { cwd } = project();
+    const seen = join(cwd, "..", "seen.ref");
+    hook(cwd, "reference-transaction", `env >> "${seen}"`);
+    writeFileSync(join(cwd, "src/a.ts"), "x\n");
+    const out = withEnvToken(() => publish({ cwd, branch: "b", result: result("done"), token: TOKEN }));
+    assert.equal(out.status, "pushed", out.reason ?? "");
+    // The commit and branch switch still run it, without the token.
+    const env = readFileSync(seen, "utf8");
+    assert.doesNotMatch(env, new RegExp(TOKEN));
+    assert.doesNotMatch(env, /extraheader|GIT_CONFIG_VALUE/i);
+  });
+
+  it("pushes nothing when pre-push rejects, and says why", () => {
+    const { cwd, remote } = project();
+    hook(cwd, "pre-push", "echo 'tests failed in recovery-api' >&2; exit 1");
+    writeFileSync(join(cwd, "src/a.ts"), "x\n");
+    const out = publish({ cwd, branch: "b", result: result("done") });
+    assert.equal(out.status, "failed");
+    assert.match(out.reason ?? "", /pre-push/);
+    assert.match(out.reason ?? "", /tests failed in recovery-api/);
+    assert.match(out.commit ?? "", /^[0-9a-f]{40}$/);
+    assert.throws(() =>
+      execFileSync("git", ["rev-parse", "--verify", "b"], { cwd: remote, stdio: "ignore" }),
+    );
   });
 });
