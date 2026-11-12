@@ -1,6 +1,6 @@
 # Security: model and known limits
 
-**Last reviewed:** 2026-11-11, by a security review of the allow rules and the PR reviewer's advisories on #13. **Scope:** the harness in `src/`, the image, the `--publish` step and the GitHub workflows. **Audience:** whoever deploys the team or changes its safety layer.
+**Last reviewed:** 2026-11-11, by a security review of the allow rules, six rounds of the PR reviewer's advisories on #13, and a live check of the SDK's permission rules (S11). **Scope:** the harness in `src/`, the image, the `--publish` step and the GitHub workflows. **Audience:** whoever deploys the team or changes its safety layer.
 
 This page lists what protects a run and every known way around it, so a deployment decision is made with the gaps in view. [deployment.md](deployment.md) covers how to deploy; this page covers what that deployment still exposes. When you find a new gap, add it to the register below, even if it is fixed in the same change.
 
@@ -25,9 +25,9 @@ Status: **fixed** (closed, with its test), **mitigated** (narrowed, residual ris
 
 | #   | Issue                                                                                 | Severity | Status                 |
 | --- | ------------------------------------------------------------------------------------- | -------- | ---------------------- |
-| S1  | Pre-approved `git diff` read any file outside the project                             | High     | fixed                  |
+| S1  | Pre-approved `git diff` read any file outside the project | Medium | fixed |
 | S2  | Bash reads are confined only by approval and a name-based secret list                 | Medium   | mitigated              |
-| S3  | Output redirects from approved commands can write outside the project                 | Low      | open                   |
+| S3  | Output redirects from approved commands can write outside the project | Low | mitigated |
 | S4  | Approved commands run code the team writes                                            | Medium   | accepted, mitigated    |
 | S5  | `--allow` accepts rules that approve almost anything                                  | Medium   | open, accepted for now |
 | S6  | The target repository's `.claude` settings, hooks and MCP servers load into every run | Medium   | accepted               |
@@ -35,10 +35,12 @@ Status: **fixed** (closed, with its test), **mitigated** (narrowed, residual ris
 | S8  | The push token reached the repository's hooks during `--publish`                      | High     | fixed                  |
 | S9  | The model credential is readable by code the run executes                             | Medium   | accepted, mitigated    |
 | S10 | Shell rules are pattern-based and have been bypassed before                           | Medium   | mitigated              |
-| S11 | Harness behaviour rests on SDK details verified against one version                   | Low      | open                   |
+| S11 | Harness behaviour rests on SDK details verified against one version | Low | verified for 0.3.283 |
 | S12 | GitHub workflows run with secrets on comments and PRs                                 | Low      | mitigated              |
 
 ### S1. Pre-approved `git diff` read any file outside the project (fixed)
+
+**Reachability, verified 2026-11-11 on SDK 0.3.283 (S11):** the SDK's own permission rules refuse a pre-approved command that names a path outside the working directory (absolute, `..` or `~`), so an unattended run could not have used this. It was reachable through an interactive approval, and would be again if an SDK version stopped checking paths. Hence Medium, and the hook's confinement stays as defense in depth.
 
 The recovery-platform profile pre-approves `Bash(git diff:*)`. `git diff --no-index /etc/passwd /dev/null` printed any file with no approval, and inside a repository `git diff /etc/hosts /dev/null` switches to `--no-index` without being asked. That reached files the secret list misses (S2).
 
@@ -58,11 +60,11 @@ The hook also refuses commands that name a secret, by name: `.env*`, keys, `~/.s
 
 **Mitigation:** the container has none of those files with anything in them (no Firebase login, no shell history worth reading, no mounted secrets). **Rule for changes:** before adding an allow rule for a command that reads, check the hook confines it, or add a confinement like S1's.
 
-### S3. Output redirects from approved commands can write outside the project (open, low priority)
+### S3. Output redirects from approved commands can write outside the project (mitigated)
 
-The hook checks redirect targets only against protected paths (`git log > .husky/pre-commit` is refused). `git log > /tmp/x` passes the hook. Whether the SDK's prefix rule `Bash(git log:*)` approves a command with a redirect is not verified. If it does, an approved command can write anywhere the user can.
+The hook checks redirect targets only against protected paths (`git log > .husky/pre-commit` is refused). `git log > /tmp/x` passes the hook. If an allow rule approved such a command, it could write anywhere the user can.
 
-**Why low:** in the container the root filesystem is read-only and writable places are tmpfs mounts and `/workspace`, so a stray write is lost with the container or shows up in `changed_files`. **Fix when needed:** refuse redirect, `tee` and `-o` targets that resolve outside the project, next to the protected-path check.
+**Verified 2026-11-11 on SDK 0.3.283 (S11):** the SDK refuses a redirect from a prefix-approved command, inside the project or not (`git diff > out.txt` is refused under `Bash(git diff:*)`), so an unattended run can't reach this. It needs an interactive approval. **Why low besides:** in the container the root filesystem is read-only and writable places are tmpfs mounts and `/workspace`, so a stray write is lost with the container or shows up in `changed_files`. **Fix when needed:** refuse redirect, `tee` and `-o` targets that resolve outside the project, next to the protected-path check.
 
 ### S4. Approved commands run code the team writes (accepted, mitigated)
 
@@ -114,17 +116,35 @@ Tests: `src/publish.test.ts`, "publish keeps the push token from the repository'
 
 ### S10. Shell rules are pattern-based and have been bypassed before (mitigated)
 
-Each review round of the safety layer (PRs #2–#5, #8) found spellings that slipped past a rule: quoting, wrappers (`env`, `npx`, `node <bin>`), separators, git global options, abbreviations. The rules now check several spellings of each command (`spellings()`, `normalizeGit`, `expandLongOptions`), and every fixed bypass is pinned as a test. Expect more: PR #13 alone took six review rounds, each finding a new spelling (abbreviations, `cd` in its many forms, `+=`, `read`, `printf -v`, computed names). Matching text can't keep up with everything a shell can express. Whether any of these is reachable in an unattended run depends on how the SDK matches a prefix rule against a compound command, an assignment or a wrapper (S11): if `Bash(git diff:*)` doesn't approve `cd / && git diff …`, the spellings only matter for interactive approvals. Verifying that is worth more than another round of patterns. **So:** the container, not the hook, is what must hold if a rule is bypassed, and a new deny rule needs tests for abbreviations, wrappers and compound commands, as S1 and S4 have.
+Each review round of the safety layer (PRs #2–#5, #8) found spellings that slipped past a rule: quoting, wrappers (`env`, `npx`, `node <bin>`), separators, git global options, abbreviations. The rules now check several spellings of each command (`spellings()`, `normalizeGit`, `expandLongOptions`), and every fixed bypass is pinned as a test. Expect more: PR #13 alone took six review rounds, each finding a new spelling (abbreviations, `cd` in its many forms, `+=`, `read`, `printf -v`, computed names). Matching text can't keep up with everything a shell can express. Whether they are reachable in an unattended run depends on how the SDK matches a prefix rule against a compound command, an assignment, a wrapper or an outside path. S11 verifies that for 0.3.283: the SDK refuses all of these itself, so on this version the spellings matter only for interactive approvals. **So:** the container, not the hook, is what must hold if a rule is bypassed, and a new deny rule needs tests for abbreviations, wrappers and compound commands, as S1 and S4 have.
 
-### S11. Harness behaviour rests on SDK details verified against one version (open)
+### S11. Harness behaviour rests on SDK details verified against one version (verified for 0.3.283)
 
 Some guarantees depend on SDK behaviour checked against 0.3.283 only:
 
 - a hook deny overriding allow rules;
 - the built-in agents being disabled through `CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS`, which is undocumented;
-- how prefix rules treat compound commands and redirects (S3).
+- how a prefix allow rule treats a compound, wrapped or redirected command, or one naming a path outside the working directory.
 
-0.3.322 is current. **Before upgrading:** do the supervised live trial and the upgrade checks in [the readiness review](reviews/2026-11-10-standalone-readiness.md) §6. Those include re-verifying the undocumented variable and the pinned hook-ordering test, the one against a target that declares `allow: ["Bash"]`.
+**The last point, verified 2026-11-11** with `scripts/check-sdk-permissions.ts` (`pnpm check:sdk-permissions`): a live SDK run with no harness hook and no settings, allow rule `Bash(git diff:*)`, on Haiku, about $0.08. The SDK alone approved:
+
+- `git diff --stat`, and `--no-index` between two files inside the project;
+- chains and pipes with read-only commands and plain assignments: `git diff --stat && echo x`, `git diff --stat | head -1`, `x=1; git diff --stat`.
+
+It refused every other case the script tries:
+
+- a path outside the working directory (`/etc/hosts`, `../outside.txt`, `~/.zshrc`), with or without `--no-index`;
+- `cd` in any position, a subshell, `env -C`;
+- a leading `GIT_WORK_TREE=/`, `export`, `read` or a computed name;
+- a redirect, inside the project or out;
+- command substitution;
+- a chain with `cat` of an outside file.
+
+**What follows:**
+- In an unattended run, the spellings the reviewer found on #13 (S1, S10) were not reachable on this version. The hook's rules for them are defense in depth, for interactive approvals and for SDK changes.
+- The script exits 1 if any case expected to be refused runs. **Re-run it before upgrading the SDK, and update this entry.**
+
+0.3.322 is current. **Before upgrading:** also do the supervised live trial and the upgrade checks in [the readiness review](reviews/2026-11-10-standalone-readiness.md) §6. Those include re-verifying the undocumented variable and the pinned hook-ordering test, the one against a target that declares `allow: ["Bash"]`.
 
 ### S12. GitHub workflows run with secrets on comments and PRs (mitigated)
 
