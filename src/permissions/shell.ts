@@ -1,5 +1,5 @@
-import { existsSync, lstatSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import {
   expandLongOptions,
   gitCloneConfigRuns,
@@ -105,6 +105,45 @@ const RELEASE_COMMANDS: readonly RegExp[] = [
 const GIT_READ_WRITES = new RegExp(
   String.raw`${AT}${ASSIGNMENTS}${ENV}(?:\S*\/)?\\?git\s+(?:diff|log|show|format-patch|whatchanged|range-diff|grep|blame|cherry)\b[^|;&\n]*\s--(?:output(?:-directory)?|open-files-in-pager)(?=[\s=]|$)`,
 );
+
+/**
+ * npm settings that change what an allowed `npm --prefix <pkg> test` runs:
+ * the shell npm runs scripts with, NODE_OPTIONS for them (`--node-options
+ * --require=…` loads any file), another config file, or a second
+ * `--prefix` that moves the run to another package. Set by option, in any
+ * abbreviation npm accepts (`--scr`, `--nod`, `--userc`, `--prefi`) or as `-C`, or by
+ * an `npm_config_*` variable (npm reads either case), or NODE_OPTIONS
+ * itself when it loads a module (`--require`, `-r`, `--import`, `--loader`). `.npmrc` is already a
+ * secret path, so it cannot be written to the same end.
+ */
+const NPM_CONFIG_OVERRIDES = [
+  new RegExp(
+    String.raw`${AT}${ASSIGNMENTS}${ENV}(?:\S*\/)?\\?npm\b[^|;&\n]*\s--(?:scr|userc|globalc|nod(?:e(?:-(?:o[\w-]*)?)?)?)[\w-]*(?=[\s=]|$)`,
+  ),
+  new RegExp(
+    String.raw`${AT}${ASSIGNMENTS}${ENV}(?:\S*\/)?\\?npm\b[^|;&\n]*\s--prefix[\s=][^|;&\n]*\s(?:--prefi[\w-]*|-C)(?=[\s=]|$)`,
+  ),
+  /(?:^|[\s;&|(])npm_config_(?:script_shell|userconfig|globalconfig|prefix|node_options)=/i,
+  // Node's own variable for the same setting, when it loads code. Other
+  // NODE_OPTIONS (--max-old-space-size for a big Jest run) stay allowed.
+  // NODE_OPTIONS mentioned anywhere, and anywhere in the command a loader
+  // or a NODE_OPTIONS value taken from a variable (which may hold one).
+  /^(?=[\s\S]*(?:^|[^\w$])NODE_OPTIONS(?!\w))(?=[\s\S]*(?:--require|--import|--(?:experimental-)?loader|(?<=[\s=])-r(?=[\s=]|$)|(?:^|[^\w$])NODE_OPTIONS\+?=["']?[^\s"']*[$\x60]))/,
+];
+
+/** Shell builtins that set a variable named by an operand. */
+const SETTERS = String.raw`\b(?:export|declare|typeset|local|readonly|read|printf\s+(?:-\S+\s+)*-v)\b`;
+
+/**
+ * A variable whose name is built by expansion can be any variable
+ * (`export ${x}_TREE=/` sets GIT_WORK_TREE), so no rule naming one can see
+ * it; and `set -a` exports whatever a sourced file sets.
+ */
+const COMPUTED_NAMES = [
+  new RegExp(String.raw`${SETTERS}[^|;&\n<>]*?\s["']?\w*[$\x60]`),
+  /\benv\b[^|;&\n]*\s["']?\w*[$\x60][^\s=]*=/,
+  /\bset\s+(?:[-+]\w*\s+)*(?:-\w*a\w*|-o\s+allexport)(?=\s|$|;)/,
+];
 
 const RELEASE_WHY =
   "deploys, publishes or pushes: the operator ships after reviewing the team's work";
@@ -277,9 +316,22 @@ const HARD_DENY: Array<{
     // Configuration and programs supplied through the environment.
     pattern:
       // An editor of `true` or `:` only accepts the message or todo list.
-      /(?<![\w$])GIT_(?:CONFIG\w*|DIR|EXEC_PATH|SSH(?:_COMMAND)?|EXTERNAL_DIFF|ASKPASS|PROXY_COMMAND|TEMPLATE_DIR|(?:SEQUENCE_)?EDITOR(?!=['"]?(?:true|:)['"]?(?:\s|$)))=/,
+      /(?<![\w$])GIT_(?:CONFIG\w*|DIR|EXEC_PATH|SSH(?:_COMMAND)?|EXTERNAL_DIFF|ASKPASS|PROXY_COMMAND|TEMPLATE_DIR|(?:SEQUENCE_)?EDITOR(?!\+?=['"]?(?:true|:)['"]?(?:\s|$)))\+?=/,
     why: "changes what git runs",
   },
+  {
+    // The same variables set without `NAME=`: by a declaration builtin,
+    // `read` or `printf -v` (then exported). A plain mention (`grep GIT_DIR`,
+    // `echo $GIT_DIR`) is fine.
+    pattern: new RegExp(
+      String.raw`(?:${SETTERS})[^|;&\n<>]*\s["']?GIT_(?:CONFIG\w*|DIR|EXEC_PATH|SSH(?:_COMMAND)?|EXTERNAL_DIFF|ASKPASS|PROXY_COMMAND|TEMPLATE_DIR|(?:SEQUENCE_)?EDITOR)(?!\w)`,
+    ),
+    why: "changes what git runs",
+  },
+  ...COMPUTED_NAMES.map((pattern) => ({
+    pattern,
+    why: "sets a variable whose name is computed, or exports every variable a script sets",
+  })),
   {
     // Only when sent to a database client: writing a migration file that
     // contains DROP TABLE, or grepping for it, is ordinary work.
@@ -315,6 +367,10 @@ const HARD_DENY: Array<{
     why: "publishes to a registry",
   },
   { pattern: />\s*\/dev\/[sh]d[a-z]/, why: "writes to a raw device" },
+  ...NPM_CONFIG_OVERRIDES.map((pattern) => ({
+    pattern,
+    why: "changes npm's shell, config or package directory",
+  })),
   {
     pattern: GIT_READ_WRITES,
     why: "a git read command that writes files or runs a program",
@@ -680,6 +736,120 @@ function substitutionRunsAsCommand(command: string): boolean {
   return new RegExp(String.raw`${MASKED_AT}(?:\$\((?!\()|\x60)`).test(masked);
 }
 
+/** git's global options that take their value as the next word. */
+const GIT_VALUE_OPTIONS = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--exec-path",
+  "--config-env",
+]);
+
+/**
+ * `--no-index` or an abbreviation of it: git grep's option parser accepts
+ * any unambiguous prefix, and `--no-in` is the shortest (`--no-i` could
+ * also be `--no-ignore-case`).
+ */
+const isNoIndex = (word: string): boolean =>
+  word.length >= "--no-in".length && "--no-index".startsWith(word);
+
+/**
+ * A directory change anywhere in a command: `cd`, `pushd`, `popd` or zsh's
+ * `chdir` as a word (not inside a path like `src/cd.ts`), or any mention of
+ * CDPATH, GIT_DIR, GIT_WORK_TREE or GIT_COMMON_DIR, which point the shell or
+ * git somewhere else. A mention, not only `NAME=`: `NAME+=`, `read NAME`,
+ * `printf -v NAME` and `declare` set them too.
+ * Spotting every shell form of a cd at command position (after `coproc`, in
+ * an alias, inside `bash -c`) is a losing game, so any of these counts.
+ */
+const DIRECTORY_CHANGE =
+  /(?:^|[^\w./-])(?:cd|pushd|popd|chdir)(?=$|[^\w./-])|(?:^|[^\w$])(?:CDPATH|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR)(?!\w)/;
+
+/**
+ * True when `git diff` or `git grep` could read files outside the project:
+ * either one with --no-index (or an abbreviation of it), which compares or
+ * searches any file; git diff with a path outside the work tree, which
+ * switches to --no-index unasked; either one run from outside the project
+ * through git's -C, --git-dir or --work-tree or env's chdir option; or
+ * either one in a command that changes directory anywhere (DIRECTORY_CHANGE),
+ * since the hook can't know where git then runs. An allow rule for
+ * `git diff` would otherwise approve a read the file tools refuse. A path
+ * the text cannot judge (`~`, a variable) counts as outside.
+ */
+function gitReadsOutside(command: string, cwd: string | undefined): boolean {
+  let real: string | undefined;
+  try {
+    real = cwd === undefined ? undefined : realpathSync(cwd);
+  } catch {
+    real = undefined;
+  }
+  const roots = [
+    ...new Set(
+      [cwd, real]
+        .filter((r): r is string => r !== undefined)
+        .map((r) => resolve(r)),
+    ),
+  ];
+  const outside = (base: string | undefined, word: string): boolean => {
+    if (/^~|\$/.test(word)) return true;
+    if (base === undefined) {
+      return /^\//.test(word) || /(^|\/)\.\.(\/|$)/.test(word);
+    }
+    const path = resolve(base, word);
+    return !roots.some((root) => path === root || path.startsWith(root + sep));
+  };
+  const moved = DIRECTORY_CHANGE.test(command);
+
+  return command.split(/&&|\|\||[|;&\n]/).some((segment) => {
+    const words = segment
+      .trim()
+      .replace(/^[({\s]+/, "")
+      .split(/\s+/)
+      .map((word) => dequote(word).replace(/[)`]+$/, ""))
+      .filter(Boolean);
+    let i = words.findIndex((word) => /^(?:\S*\/)?git$/.test(word));
+    if (i < 0) return false;
+    let here = cwd === undefined ? undefined : resolve(cwd);
+    let gone = moved;
+    // env's chdir option, in any spelling: -C dir, -Cdir, a cluster ending
+    // in C (-iC/), or a prefix of --chdir. Where it goes is not judged.
+    const before = words.slice(0, i);
+    if (
+      before.some((word) => /^(?:\S*\/)?env$/.test(word)) &&
+      before.some((word) => /^-[A-Za-z]*C/.test(word) || /^--chd/.test(word))
+    ) {
+      gone = true;
+    }
+    for (i += 1; i < words.length && words[i]!.startsWith("-"); i += 1) {
+      const [option, attached] = words[i]!.split(/=(.*)/s, 2) as [
+        string,
+        string | undefined,
+      ];
+      const value =
+        attached ?? (GIT_VALUE_OPTIONS.has(option) ? words[++i] : undefined);
+      if (value === undefined) continue;
+      if (option === "-C") {
+        if (outside(here, value)) gone = true;
+        if (here !== undefined) here = resolve(here, value);
+      } else if (option === "--git-dir" || option === "--work-tree") {
+        if (outside(here, value)) gone = true;
+      }
+    }
+    const sub = words[i];
+    if (sub !== "diff" && sub !== "grep") return false;
+    const args = words.slice(i + 1);
+    if (gone || args.some(isNoIndex)) return true;
+    if (sub === "grep") return false;
+    const dash = args.indexOf("--");
+    const operands = args.filter(
+      (arg, k) => (dash >= 0 && k > dash) || (!arg.startsWith("-") && k !== dash),
+    );
+    return operands.some((operand) => outside(here, operand));
+  });
+}
+
 /**
  * `git rm -r` without `--cached` deletes the files. The words are read as
  * git sees them (quotes removed, a `#` word ends the command), and only
@@ -736,6 +906,9 @@ export function bashDenyReason(command: string, cwd?: string): string | null {
       : undefined) ??
     (normalized.some((form) => checkoutDiscards(form, cwd))
       ? "git checkout with a path discards uncommitted changes"
+      : undefined) ??
+    (forms.some((form) => gitReadsOutside(form, cwd))
+      ? "git diff or git grep reading files outside the project, or after a directory change: run it on its own, from the project root"
       : undefined) ??
     forms.map(gitGlobalOptionReason).find(Boolean) ??
     (forms.some(gitConfigWrites) || forms.some(gitCloneConfigRuns)

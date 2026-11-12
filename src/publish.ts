@@ -1,4 +1,7 @@
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { isRecord } from "./tools.js";
 import { isSecretPath } from "./permissions/paths.js";
 
@@ -12,7 +15,9 @@ import { isSecretPath } from "./permissions/paths.js";
  * It publishes only a run whose manager reported done (or partial, when
  * asked), only to a branch that is not the remote's default branch, never
  * with force, and never a file that holds secrets. The repository's own
- * commit hooks run, so its gates apply.
+ * commit and pre-push hooks run, so its gates apply, but never with the
+ * token: they run the repository's code, which the team may have written
+ * (recovery-platform's pre-push runs each changed package's tests).
  */
 export interface PublishOptions {
   cwd: string;
@@ -44,14 +49,21 @@ const DEFAULT_NAMES = new Set(["main", "master"]);
 function git(
   cwd: string,
   args: string[],
-  options: { input?: string; env?: NodeJS.ProcessEnv; raw?: boolean } = {},
+  options: {
+    input?: string;
+    /** Default: this process's environment without the GitHub token. */
+    env?: NodeJS.ProcessEnv;
+    raw?: boolean;
+  } = {},
 ): string {
   const out = execFileSync("git", args, {
     cwd,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
     ...(options.input === undefined ? {} : { input: options.input }),
-    ...(options.env === undefined ? {} : { env: options.env }),
+    // Never the token by default: a switch, an add or a reset can run the
+    // repository's hooks (reference-transaction, post-checkout) too.
+    env: options.env ?? withoutToken(process.env, undefined),
   });
   // Porcelain output starts with a status column that may be a space.
   return options.raw ? out : out.trim();
@@ -86,6 +98,77 @@ export function pushEnvironment(
     GIT_CONFIG_KEY_1: "http.https://github.com/.extraheader",
     GIT_CONFIG_VALUE_1: `AUTHORIZATION: basic ${basic}`,
   };
+}
+
+/**
+ * The environment without the GitHub token, for anything that runs the
+ * repository's code (its hooks). Drops GITHUB_TOKEN, GH_TOKEN and any other
+ * variable holding the token's value.
+ */
+export function withoutToken(
+  env: NodeJS.ProcessEnv,
+  token: string | undefined,
+): NodeJS.ProcessEnv {
+  const clean: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key === "GITHUB_TOKEN" || key === "GH_TOKEN") continue;
+    if (token && value?.includes(token)) continue;
+    clean[key] = value;
+  }
+  return clean;
+}
+
+const ZERO = "0".repeat(40);
+
+/**
+ * Runs the pre-push hook as `git push` would (the remote and its URL as
+ * arguments, the ref line on stdin) but in an environment without the
+ * token. The push itself then runs no hook at all (--no-verify, and an empty
+ * hooks path for reference-transaction): any token git can push with is
+ * readable by the hooks git push runs.
+ */
+function prePush(
+  root: string,
+  remote: string,
+  branch: string,
+  commit: string,
+  env: NodeJS.ProcessEnv,
+  pushEnv: NodeJS.ProcessEnv,
+): void {
+  let remoteSha = ZERO;
+  try {
+    remoteSha =
+      git(root, ["ls-remote", remote, `refs/heads/${branch}`], {
+        env: pushEnv,
+      }).split(/\s/)[0] || ZERO;
+  } catch {
+    // The push reports an unreachable remote; the hook sees a new branch.
+  }
+  const url = git(root, ["remote", "get-url", remote]);
+  const dir = mkdtempSync(join(tmpdir(), "sdt-pre-push-"));
+  try {
+    const stdin = join(dir, "refs");
+    writeFileSync(
+      stdin,
+      `refs/heads/${branch} ${commit} refs/heads/${branch} ${remoteSha}\n`,
+    );
+    git(
+      root,
+      [
+        "hook",
+        "run",
+        "--ignore-missing",
+        `--to-stdin=${stdin}`,
+        "pre-push",
+        "--",
+        remote,
+        url,
+      ],
+      { env },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** The changed paths, relative to the repository root, sorted. */
@@ -229,7 +312,8 @@ export function publish(options: PublishOptions): PublishResult {
     return done("failed", "the commit message must be one line", { files });
 
   // A git identity for the commit when the environment and config have none.
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  // No token: the commit runs the repository's hooks.
+  const env = withoutToken(process.env, options.token);
   let configured = false;
   try {
     configured = git(root, ["config", "user.email"]) !== "";
@@ -289,10 +373,33 @@ export function publish(options: PublishOptions): PublishResult {
     return done("failed", `commit failed: ${failure(error)}`, { files });
   }
 
+  const pushEnv = pushEnvironment(options.token, env);
   try {
-    git(root, ["push", "--quiet", remote, `HEAD:refs/heads/${branch}`], {
-      env: pushEnvironment(options.token, env),
-    });
+    prePush(root, remote, branch, commit, env, pushEnv);
+  } catch (error) {
+    return done(
+      "failed",
+      `committed ${commit.slice(0, 12)} on ${branch}, but the pre-push hook rejected it, so nothing was pushed: ${failure(error)}`,
+      { files, commit },
+    );
+  }
+  try {
+    git(
+      root,
+      [
+        // No hooks at all while the token is in git's environment:
+        // --no-verify skips only pre-push, and updating the remote-tracking
+        // ref would still run reference-transaction.
+        "-c",
+        "core.hooksPath=/dev/null",
+        "push",
+        "--quiet",
+        "--no-verify",
+        remote,
+        `HEAD:refs/heads/${branch}`,
+      ],
+      { env: pushEnv },
+    );
   } catch (error) {
     return done(
       "failed",
