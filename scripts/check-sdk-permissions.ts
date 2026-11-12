@@ -9,7 +9,7 @@
  *
  *   node --import tsx scripts/check-sdk-permissions.ts
  *
- * It costs a few cents (Haiku, about 25 turns) and uses whatever credential
+ * It costs a few cents (Haiku, about 25 turns; about $0.08 on 2026-11-11) and uses whatever credential
  * the SDK finds (ANTHROPIC_API_KEY, or the logged-in Claude account). It
  * exits 1 if any command expected to be refused ran.
  */
@@ -39,6 +39,10 @@ const ALLOW = "Bash(git diff:*)";
 const CASES: Array<[string, "run" | "refuse"]> = [
   ["git diff --stat", "run"],
   ["git diff --no-index a.txt a.txt", "run"],
+  // Chains and pipes with read-only commands, and a plain assignment.
+  ["git diff --stat && echo chained", "run"],
+  ["git diff --stat | head -1", "run"],
+  ["x=1; git diff --stat", "run"],
   // Paths outside the working directory.
   ["git diff --no-index /etc/hosts /dev/null", "refuse"],
   ["git diff --no-index ../outside.txt a.txt", "refuse"],

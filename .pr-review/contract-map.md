@@ -4,7 +4,7 @@
 
 ## role-registry
 
-- **Source:** the keys of `AGENTS` in `src/team.ts`. `ROLES` and the roster derive from them.
+- **Source:** the keys of `AGENTS` in `src/agents/index.ts` (re-exported by `src/team.ts`). `ROLES` and the roster derive from them.
 - **Other sides:**
   - role names in the routing prose of `src/orchestrator/prompt.md`, in the `<workflow>` and `<verification>` sections
   - mentions of other roles in each `src/agents/<role>/prompt.md`
