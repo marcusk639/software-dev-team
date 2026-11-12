@@ -8,14 +8,39 @@ import { isOneOf, isRecord, WRITE_TOOLS } from "./tools.js";
 export const TEST_AUTHOR = "qa-tester";
 
 /**
- * A test file, by the layouts test runners use: `*.test.*`, `*.spec.*` and
- * `*.e2e.*` files, and anything under `__tests__/`, `test/`, `tests/`,
- * `e2e/` or `maestro/`. This matches the test paths recovery-platform's own
- * implementer gate protects. Only these are locked: a source stub qa-tester
- * adds so a test can load is the engineer's to implement.
+ * A test file, by the layouts test runners use: anything under `__tests__/`,
+ * `test/`, `tests/`, `e2e/` or `maestro/`; `*.test.*`, `*.spec.*`, `*.e2e.*`
+ * and Cypress's `*.cy.*` source files; Python's `test_*.py`, and the
+ * `*_test.*` / `*_spec.*` names Go, Python and RSpec use; and the CamelCase
+ * `*Test.*` / `*Tests.*` files and `*Tests/` projects of .NET, Xcode, Java
+ * and Kotlin (`MyApp.Tests/UserTests.cs`, `androidTest/`). This covers the
+ * test paths recovery-platform's own implementer gate protects. Only these
+ * are locked: a source stub qa-tester adds so a test can load is the
+ * engineer's to implement, and a snapshot or a document is not a test.
  */
-export const TEST_PATH =
-  /(^|\/)(__tests__|e2e|\.?maestro|tests?)\/|\.(test|spec|e2e)\.[cm]?[jt]sx?$/i;
+const CODE = "(?:[cm]?[jt]sx?|py|rb|go|java|kts?|swift|dart|php|cs|rs|exs?)";
+const TEST_PATH = new RegExp(
+  [
+    String.raw`(^|/)(__tests__|e2e|\.?maestro|tests?)/`,
+    String.raw`\.(test|spec|e2e|cy)\.${CODE}$`,
+    String.raw`(^|/)test_[^/]*\.py$`,
+    String.raw`_(test|spec)\.${CODE}$`,
+  ].join("|"),
+  "i",
+);
+/**
+ * Case-sensitive, so `Contest.cs` and `latest/` are not tests. A directory
+ * counts only as a `*Tests/` project or Android's `androidTest/`, and a file
+ * only in the languages that name tests this way, so an `ABTest/` or
+ * `LoadTest/` directory and a TypeScript `ABTest.ts` model are not tests.
+ */
+const CAMEL_TEST_PATH = new RegExp(
+  String.raw`(^|/)([^/]*Tests|androidTest)/|[A-Za-z0-9]Tests?\.(cs|swift|java|kts?|php)$`,
+);
+
+export function isTestPath(path: string): boolean {
+  return TEST_PATH.test(path) || CAMEL_TEST_PATH.test(path);
+}
 
 /**
  * The path a file would have once every symlink is resolved, so `a/../x`,
@@ -51,7 +76,7 @@ const deny = (reason: string) => ({
 
 /**
  * Keeps the tests qa-tester writes in a run as the acceptance contract: once
- * qa-tester has written a test file (TEST_PATH) with a file tool, any other
+ * qa-tester has written a test file (isTestPath) with a file tool, any other
  * role's file-tool write to it is denied, so an engineer cannot reach green by editing the
  * test instead of the code. A write counts once it succeeded (PostToolUse).
  * A file is matched by its identity (device and inode), so a hard link, a
@@ -123,7 +148,7 @@ export function createTestAuthorship(options: {
                 input.agent_type === TEST_AUTHOR
               ) {
                 const path = pathOf(input.tool_input);
-                if (path !== undefined && TEST_PATH.test(relative(root, path))) {
+                if (path !== undefined && isTestPath(relative(root, path))) {
                   owned.add(path);
                   const id = identity(path);
                   if (id !== undefined) ownedIds.add(id);

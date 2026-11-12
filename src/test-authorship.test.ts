@@ -249,3 +249,45 @@ describe("review round 2: only tests are locked, not the stubs qa-tester adds", 
   });
 });
 
+
+describe("review round 3: tests named by other runners' conventions are tests too", () => {
+  it("locks and lists them, and leaves look-alike source and docs alone", async () => {
+    const cwd = project();
+    const authorship = createTestAuthorship({ cwd });
+    const tests = [
+      "api/test_export.py",
+      "api/export_test.py",
+      "svc/export_test.go",
+      "cypress/e2e/login.cy.ts",
+      "spec/models/user_spec.rb",
+      "src/export.test.mts",
+    ];
+    const notTests = ["src/latest.ts", "src/contest.py", "docs/export.spec.md", "src/snaps/a.test.ts.snap"];
+    for (const file_path of [...tests, ...notTests]) {
+      await fire(authorship, "PostToolUse", "qa-tester", "Write", { file_path });
+    }
+    assert.deepEqual(authorship.files(), [...tests].sort());
+    for (const file_path of tests) {
+      assert.ok(await fire(authorship, "PreToolUse", "backend-engineer", "Edit", { file_path }), file_path);
+    }
+  });
+});
+
+describe("review round 4: .NET and Xcode test layouts", () => {
+  it("locks CamelCase test projects and files, and leaves look-alikes alone", async () => {
+    const cwd = project();
+    const authorship = createTestAuthorship({ cwd });
+    const tests = [
+      "MyApp.Tests/UserTests.cs",
+      "MyAppTests/LoginTests.swift",
+      "Sources/App/LoginTest.swift",
+      "app/src/androidTest/java/ExportTest.kt",
+      "Tests/AppTests/ExportTests.swift",
+    ];
+    const notTests = ["src/latest/index.ts", "src/contests/Latest.java", "src/Contest.cs", "src/models/ABTest.ts", "src/ABTest/model.ts", "src/LoadTest/config.ts"];
+    for (const file_path of [...tests, ...notTests]) {
+      await fire(authorship, "PostToolUse", "qa-tester", "Write", { file_path });
+    }
+    assert.deepEqual(authorship.files(), [...tests].sort());
+  });
+});
